@@ -1,0 +1,3 @@
+[submodule "cnn_experimentation/chord-cnn-lstm-model"]
+	path = cnn_experimentation/chord-cnn-lstm-model
+	url = https://github.com/ptnghia-j/chord-cnn-lstm-model.git
