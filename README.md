@@ -53,7 +53,7 @@ ChordSense/
 Create and activate the backend virtual environment, then install dependencies:
 
 ```bash
-cd ~/ChordSense/backend
+cd backend
 python3.10 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -66,7 +66,8 @@ deactivate
 The backend currently expects the model repository to use its own separate Python virtual environment.
 
 ```bash
-cd ~/ChordSense/backend/model_repo
+cd ..
+cd model_repo
 python3.10 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip setuptools wheel
