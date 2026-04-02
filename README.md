@@ -61,6 +61,8 @@ pip install -r requirements.txt
 deactivate
 ```
 
+
+
 ## Model Repository Setup
 
 The backend currently expects the model repository to use its own separate Python virtual environment.
@@ -75,6 +77,8 @@ pip uninstall -y h5py numpy
 pip install "numpy<2"
 pip install --no-build-isolation "h5py==3.8.0"
 pip install -r requirements.txt
+sed -i 's/dtype=np.int/dtype=int/g' extractors/xhmm_ismir.py
+sed -i 's/dtype=int8/dtype=np.int8/g' extractors/xhmm_ismir.py
 deactivate
 ```
 
