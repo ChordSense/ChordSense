@@ -73,12 +73,16 @@ python3.10 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
+
+# THIS PART ONLY REQUIRED IF ON 2GB JETSON
 pip uninstall -y h5py numpy
 pip install "numpy<2"
 pip install --no-build-isolation "h5py==3.8.0"
 pip install -r requirements.txt
 sed -i 's/dtype=np.int/dtype=int/g' extractors/xhmm_ismir.py
 sed -i 's/dtype=int8/dtype=np.int8/g' extractors/xhmm_ismir.py
+
+
 deactivate
 ```
 
