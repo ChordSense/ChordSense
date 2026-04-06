@@ -1,4 +1,5 @@
 use eframe::egui;
+use egui::Separator;
 use egui_extras::install_image_loaders;
 use reqwest::blocking::{multipart, Client};
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
@@ -23,6 +24,24 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| {
             install_image_loaders(&cc.egui_ctx);
+
+            let mut fonts = egui::FontDefinitions::default();
+
+            fonts.font_data.insert(
+                "rakkas".to_owned(),
+                std::sync::Arc::new(
+                    egui::FontData::from_static(include_bytes!("../../assets/font/Rakkas-Regular.ttf"))
+                ),
+            );
+
+            fonts
+                .families
+                .entry(egui::FontFamily::Name("rakkas".into()))
+                .or_default()
+                .push("rakkas".to_owned());
+
+            cc.egui_ctx.set_fonts(fonts);
+
             Ok(Box::new(MyEguiApp::default()))
         }),
     )
@@ -408,14 +427,22 @@ impl MyEguiApp {
 
 impl eframe::App for MyEguiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        
         if !self.started {
             let any_pressed = ctx.input(|i| !i.keys_down.is_empty());
             if any_pressed {
                 self.started = true;
             }
         }
-
-        ctx.set_visuals(egui::Visuals::light());
+        // Set background color and force black text.
+        let mut visuals = egui::Visuals::light();
+        visuals.panel_fill = egui::Color32::from_rgb(240, 230, 210); // beige
+        visuals.override_text_color = Some(egui::Color32::BLACK);
+        ctx.set_visuals(visuals);
 
         if self.started && ctx.input(|i| i.key_pressed(egui::Key::M)) {
             self.pause();
@@ -427,18 +454,6 @@ impl eframe::App for MyEguiApp {
         if self.started && self.mode == 0 && self.is_playing {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
-
-        egui::TopBottomPanel::bottom("footer")
-            .exact_height(55.0)
-            .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("ChordSenseOfficial • Rust + egui frontend • Python backend")
-                            .size(24.0)
-                            .color(egui::Color32::GRAY),
-                    );
-                });
-            });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             if !self.started {
@@ -481,6 +496,13 @@ fn pretty_chord_label(raw: &str) -> String {
     } else {
         label
     }
+}
+
+fn format_time_mm_ss(seconds: f64) -> String {
+    let total_seconds = seconds.max(0.0).floor() as u64;
+    let minutes = total_seconds / 60;
+    let secs = total_seconds % 60;
+    format!("{:02}:{:02}", minutes, secs)
 }
 
 fn bass_degree_to_note(raw: &str, bass: &str) -> Option<String> {
@@ -625,37 +647,34 @@ fn show_start_screen(ui: &mut egui::Ui) {
             egui::Layout::top_down(egui::Align::Center),
             |ui| {
                 egui::Frame::new()
-                    .fill(egui::Color32::from_gray(70))
+                    .fill(egui::Color32::BLACK)
                     .stroke(egui::Stroke::new(2.0, egui::Color32::WHITE))
                     .corner_radius(egui::CornerRadius::same(20))
-                    .inner_margin(egui::Margin::same(30))
+                    .inner_margin(egui::Margin::same(10))
                     .show(ui, |ui| {
                         ui.horizontal_centered(|ui| {
                             ui.add_space(180.0);
                             ui.label(
-                                egui::RichText::new("♪")
-                                    .size(48.0)
-                                    .color(egui::Color32::from_rgb(80, 160, 255)),
-                            );
-                            ui.label(
                                 egui::RichText::new("♫")
-                                    .size(48.0)
-                                    .color(egui::Color32::from_rgb(242, 155, 47)),
+                                    .size(60.0)
+                                    .color(egui::Color32::from_rgb(240, 230, 210)),
                             );
                             ui.add_space(15.0);
                             ui.label(
                                 egui::RichText::new("ChordSense")
                                     .size(72.0)
-                                    .color(egui::Color32::WHITE),
+                                    .color(egui::Color32::from_rgb(250, 240, 230))
+                                    .family(egui::FontFamily::Name("rakkas".into())),
                             );
+                            ui.add_space(180.0);
                         });
 
                         ui.add_space(24.0);
 
                         ui.label(
                             egui::RichText::new("Press any button to start")
-                                .size(38.0)
-                                .color(egui::Color32::WHITE),
+                                .size(18.0)
+                                .color(egui::Color32::from_rgb(240, 230, 210)),
                         );
                     });
             },
@@ -667,25 +686,73 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
     let max_duration = app.max_duration();
 
     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-        ui.add_space(20.0);
-        ui.heading(egui::RichText::new("Mode: Play Along").size(48.0));
-        ui.add_space(12.0);
+        ui.add_space(25.0);
+        ui.horizontal(|ui| {
+            ui.add_space(25.0);
+            ui.heading(egui::RichText::new("Mode: Play Along").size(48.0).family(egui::FontFamily::Name("rakkas".into())));
+            ui.add_space(750.0);
+            //ui.label(egui::RichText::new("ChordSense").size(48.0).color(egui::Color32::BLACK).family(egui::FontFamily::Name("rakkas".into())),);
+            egui::Frame::new()
+                    .fill(egui::Color32::BLACK)
+                    .stroke(egui::Stroke::new(2.0, egui::Color32::WHITE))
+                    .corner_radius(egui::CornerRadius::same(30))
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.add_space(50.0);
+                            ui.label(
+                                egui::RichText::new("ChordSense")
+                                    .size(48.0)
+                                    .color(egui::Color32::from_rgb(240, 230, 210))
+                                    .family(egui::FontFamily::Name("rakkas".into())),
+                            );
+                            ui.add_space(50.0);
+                        });
+
+                    });
+        });
+        
+        ui.add_space(25.0);
+        ui.separator();
+
 
         ui.horizontal(|ui| {
-            if ui.button("Load Audio").clicked() {
+            ui.add_space(20.0);
+            if ui.add( egui::Button::new(egui::RichText::new("Load Audio").color(egui::Color32::WHITE)).fill(egui::Color32::BLACK)
+                )
+                .clicked()
+            {
                 app.choose_audio_file();
             }
-            if ui.button("Analyze").clicked() {
+
+            if ui.add(
+                    egui::Button::new(
+                        egui::RichText::new("Analyze").color(egui::Color32::WHITE)
+                    )
+                    .fill(egui::Color32::BLACK)
+                )
+                .clicked()
+            {
                 app.analyze_audio();
             }
 
             ui.label("Dict:");
-            egui::ComboBox::from_id_salt("dict_box")
-                .selected_text(&app.selected_dict)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut app.selected_dict, "submission".to_string(), "submission");
-                    ui.selectable_value(&mut app.selected_dict, "ismir2017".to_string(), "ismir2017");
-                    ui.selectable_value(&mut app.selected_dict, "full".to_string(), "full");
+            egui::Frame::new()
+                .fill(egui::Color32::BLACK)
+                .stroke(egui::Stroke::new(1.0, egui::Color32::WHITE))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin::symmetric(8, 4))
+                .show(ui, |ui| {
+                    egui::ComboBox::from_id_salt("dict_box")
+                        .selected_text(
+                            egui::RichText::new(&app.selected_dict)
+                                .color(egui::Color32::WHITE)
+                        )
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut app.selected_dict, "submission".to_string(), "submission");
+                            ui.selectable_value(&mut app.selected_dict, "ismir2017".to_string(), "ismir2017");
+                            ui.selectable_value(&mut app.selected_dict, "full".to_string(), "full");
+                        });
                 });
 
             if let Some(audio) = &mut app.audio {
@@ -700,12 +767,23 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
         });
 
         ui.add_space(12.0);
-        ui.label(egui::RichText::new(format!("Status: {}", app.status_message)).size(24.0));
-        ui.label(format!(
-            "Debug: chord_data loaded = {}, chord count = {}",
-            app.chord_data.is_some(),
-            app.chord_data.as_ref().map(|d| d.chords.len()).unwrap_or(0)
-        ));
+        let is_error = app.status_message.contains("Failed")
+            || app.status_message.contains("failed")
+            || app.status_message.contains("No audio file selected")
+            || app.status_message.contains("error");
+
+        if is_error {
+            ui.label(
+                egui::RichText::new(format!("Status: {}", app.status_message))
+                    .size(22.0)
+                    .color(egui::Color32::RED),
+            );
+        }
+        // ui.label(format!(
+        //     "Debug: chord_data loaded = {}, chord count = {}",
+        //     app.chord_data.is_some(),
+        //     app.chord_data.as_ref().map(|d| d.chords.len()).unwrap_or(0)
+        // ));
 
         let back = egui::Image::new(egui::include_image!("../../assets/icons/back.png"))
             .fit_to_exact_size(egui::vec2(50.0, 50.0));
@@ -743,28 +821,35 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
 
             ui.add_space(12.0);
 
-            let mut slider_value = app.progress;
-            let slider_response = ui.add_sized(
-                [500.0, 30.0],
-                egui::Slider::new(&mut slider_value, 0.0..=max_duration)
-                    .show_value(false)
-                    .min_decimals(0)
-                    .max_decimals(3),
-            );
+            ui.vertical(|ui| {
+                let mut slider_value = app.progress;
 
-            if slider_response.changed() {
-                let was_playing = app.is_playing;
-                app.seek(slider_value);
-                if was_playing {
-                    app.play();
+                let slider_response = ui.add_sized(
+                    [400.0, 30.0],
+                    egui::Slider::new(&mut slider_value, 0.0..=max_duration)
+                        .show_value(false)
+                        .min_decimals(0)
+                        .max_decimals(3),
+                );
+
+                if slider_response.changed() {
+                    let was_playing = app.is_playing;
+                    app.seek(slider_value);
+                    if was_playing {
+                        app.play();
+                    }
                 }
-            }
 
-            ui.add_space(12.0);
-            ui.label(
-                egui::RichText::new(format!("{:.3}s / {:.3}s", app.progress, max_duration))
-                    .size(22.0),
-            );
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} / {}",
+                        format_time_mm_ss(app.progress),
+                        format_time_mm_ss(max_duration)
+                    ))
+                    .size(20.0),
+                );
+            });
         });
 
         let now_pos = app.progress;
@@ -773,7 +858,9 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
             active_label,
             previous_label,
             next_label,
+            previous_image_path,
             active_image_path,
+            next_image_path,
             active_model_output,
             active_simplified_output,
         ) = if let Some(data) = &app.chord_data {
@@ -787,13 +874,23 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
 
             let previous_label = previous
                 .map(|c| pretty_chord_label(&c.chord))
-                .unwrap_or_else(|| "--".to_string());
+                .unwrap_or_else(|| "".to_string());
 
             let next_label = next
                 .map(|c| pretty_chord_label(&c.chord))
-                .unwrap_or_else(|| "--".to_string());
+                .unwrap_or_else(|| "".to_string());
+
+            let previous_image_path = previous
+                .and_then(|c| chord_asset_key(&c.chord))
+                .and_then(|key| app.chord_assets.get(key).copied())
+                .map(|s| s.to_string());
 
             let active_image_path = active
+                .and_then(|c| chord_asset_key(&c.chord))
+                .and_then(|key| app.chord_assets.get(key).copied())
+                .map(|s| s.to_string());
+
+            let next_image_path = next
                 .and_then(|c| chord_asset_key(&c.chord))
                 .and_then(|key| app.chord_assets.get(key).copied())
                 .map(|s| s.to_string());
@@ -805,152 +902,205 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
                 active_label,
                 previous_label,
                 next_label,
+                previous_image_path,
                 active_image_path,
+                next_image_path,
                 active_model_output,
                 active_simplified_output,
             )
         } else {
             (
-                "No chord".to_string(),
-                "--".to_string(),
-                "--".to_string(),
+                "Please Load a Song of Choice to Play Along to!".to_string(),
+                "".to_string(),
+                "".to_string(),
+                None,
+                None,
                 None,
                 None,
                 None,
             )
         };
 
-        ui.add_space(10.0);
-        ui.label(egui::RichText::new(format!("Current Chord: {}", active_label)).size(34.0));
+        ui.add_space(20.0);
 
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!("Previous: {}", previous_label)).size(22.0));
-            ui.add_space(20.0);
-            ui.label(egui::RichText::new(format!("Next: {}", next_label)).size(22.0));
-        });
-
-        ui.add_space(16.0);
-
-        if let Some(path) = active_image_path {
-            let chord_image = egui::Image::new(format!("file://{}", path))
-                .fit_to_exact_size(egui::vec2(450.0, 530.0));
-            ui.add(chord_image);
-        } else {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_min_size(egui::vec2(450.0, 200.0));
-                ui.vertical_centered(|ui| {
-                    ui.add_space(40.0);
-                    ui.label(egui::RichText::new("No matching chord diagram asset").size(28.0));
-                    if let Some(model_output) = &active_model_output {
-                        ui.label(
-                            egui::RichText::new(format!("Model output: {}", model_output)).size(22.0),
-                        );
-                    }
-                    if let Some(simplified_output) = &active_simplified_output {
-                        ui.label(
-                            egui::RichText::new(format!("Simplified for asset: {}", simplified_output))
-                                .size(20.0),
-                        );
-                    }
-                });
+        if app.chord_data.is_none() {
+            ui.add_space(40.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new("Please Load a Song\nof Choice to Play\nAlong to!")
+                        .size(34.0),
+                );
             });
+        } else {
+            let side_col_w = 200.0;
+            let center_col_w = 320.0;
+            let col_gap = 40.0;
+            let row_h = 300.0;
+
+            let total_w = side_col_w + center_col_w + side_col_w + col_gap * 2.0;
+
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), row_h),
+                egui::Layout::left_to_right(egui::Align::Min),
+                |ui| {
+                    let left_pad = ((ui.available_width() - total_w) * 0.5).max(0.0);
+                    ui.add_space(left_pad);
+
+                    // Previous column
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(side_col_w, row_h),
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            if let Some(path) = &previous_image_path {
+                                let prev_image = egui::Image::new(format!("file://{}", path))
+                                    .fit_to_exact_size(egui::vec2(200.0, 240.0))
+                                    .tint(egui::Color32::from_white_alpha(110));
+                                ui.add(prev_image);
+                            }
+                        },
+                    );
+
+                    ui.add_space(col_gap);
+
+                    // Current column
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(center_col_w, row_h),
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            if let Some(path) = &active_image_path {
+                                let chord_image = egui::Image::new(format!("file://{}", path))
+                                    .fit_to_exact_size(egui::vec2(300.0, 340.0));
+                                ui.add(chord_image);
+                            } else if active_model_output.is_some() {
+                                egui::Frame::group(ui.style()).show(ui, |ui| {
+                                    ui.set_min_size(egui::vec2(300.0, 220.0));
+                                    ui.vertical_centered(|ui| {
+                                        ui.add_space(40.0);
+                                        ui.label(
+                                            egui::RichText::new("No matching chord diagram asset")
+                                                .size(28.0),
+                                        );
+                                    });
+                                });
+                            }
+                        },
+                    );
+
+                    ui.add_space(col_gap);
+
+                    // Next column
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(side_col_w, row_h),
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            if let Some(path) = &next_image_path {
+                                let next_image = egui::Image::new(format!("file://{}", path))
+                                    .fit_to_exact_size(egui::vec2(200.0, 240.0))
+                                    .tint(egui::Color32::from_white_alpha(110));
+                                ui.add(next_image);
+                            }
+                        },
+                    );
+                },
+            );
         }
 
         ui.add_space(12.0);
 
-        if let Some(audio) = &app.audio {
-            ui.separator();
-            ui.label(egui::RichText::new("Audio Debug").size(24.0));
-            ui.label(
-                egui::RichText::new(format!("Audio file: {}", audio.path_label())).size(18.0),
-            );
-            if let Some(duration) = audio.duration_secs() {
-                ui.label(
-                    egui::RichText::new(format!("Decoded audio duration: {:.6}s", duration)).size(18.0),
-                );
-            } else {
-                ui.label(egui::RichText::new("Decoded audio duration: unavailable").size(18.0));
-            }
-            ui.label(
-                egui::RichText::new(format!("Playback position from audio engine: {:.6}s", app.progress))
-                    .size(18.0),
-            );
-            ui.label(
-                egui::RichText::new(format!("Audio paused: {}", audio.is_paused())).size(18.0),
-            );
-            ui.label(
-                egui::RichText::new(format!("Audio queue empty: {}", audio.is_finished())).size(18.0),
-            );
-            if let Some(err) = &audio.last_error {
-                ui.label(
-                    egui::RichText::new(format!("Audio status: {}", err))
-                        .size(18.0)
-                        .color(egui::Color32::RED),
-                );
-            } else {
-                ui.label(
-                    egui::RichText::new("Audio status: loaded")
-                        .size(18.0)
-                        .color(egui::Color32::DARK_GREEN),
-                );
-            }
-        }
+        //// Debug for AUDIO
+        // if let Some(audio) = &app.audio {
+        //     ui.separator();
+        //     ui.label(egui::RichText::new("Audio Debug").size(24.0));
+        //     ui.label(
+        //         egui::RichText::new(format!("Audio file: {}", audio.path_label())).size(18.0),
+        //     );
+        //     if let Some(duration) = audio.duration_secs() {
+        //         ui.label(
+        //             egui::RichText::new(format!("Decoded audio duration: {:.6}s", duration)).size(18.0),
+        //         );
+        //     } else {
+        //         ui.label(egui::RichText::new("Decoded audio duration: unavailable").size(18.0));
+        //     }
+        //     ui.label(
+        //         egui::RichText::new(format!("Playback position from audio engine: {:.6}s", app.progress))
+        //             .size(18.0),
+        //     );
+        //     ui.label(
+        //         egui::RichText::new(format!("Audio paused: {}", audio.is_paused())).size(18.0),
+        //     );
+        //     ui.label(
+        //         egui::RichText::new(format!("Audio queue empty: {}", audio.is_finished())).size(18.0),
+        //     );
+        //     if let Some(err) = &audio.last_error {
+        //         ui.label(
+        //             egui::RichText::new(format!("Audio status: {}", err))
+        //                 .size(18.0)
+        //                 .color(egui::Color32::RED),
+        //         );
+        //     } else {
+        //         ui.label(
+        //             egui::RichText::new("Audio status: loaded")
+        //                 .size(18.0)
+        //                 .color(egui::Color32::DARK_GREEN),
+        //         );
+        //     }
+        // }
 
-        if let Some(data) = &app.chord_data {
-            ui.separator();
-            ui.label(egui::RichText::new("Detected chord timeline").size(26.0));
-            ui.label(
-                egui::RichText::new(format!(
-                    "Playback duration is based on max(audio duration, backend chord end time): {:.3}s",
-                    max_duration
-                ))
-                .size(18.0)
-                .color(egui::Color32::DARK_GRAY),
-            );
-            ui.label(
-                egui::RichText::new(format!("Chord end time: {:.3}s", data.duration))
-                    .size(18.0)
-                    .color(egui::Color32::DARK_GRAY),
-            );
+        // if let Some(data) = &app.chord_data {
+            // ui.label(egui::RichText::new("Detected chord timeline").size(26.0));
+            // ui.label(
+            //     egui::RichText::new(format!(
+            //         "Playback duration is based on max(audio duration, backend chord end time): {:.3}s",
+            //         max_duration
+            //     ))
+            //     .size(18.0)
+            //     .color(egui::Color32::DARK_GRAY),
+            // );
+            // ui.label(
+            //     egui::RichText::new(format!("Chord end time: {:.3}s", data.duration))
+            //         .size(18.0)
+            //         .color(egui::Color32::DARK_GRAY),
+            // );
 
-            egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-                for seg in &data.chords {
-                    let is_active = app.progress >= seg.start && app.progress < seg.end;
-                    let text = format!(
-                        "{:.3} - {:.3}    {}",
-                        seg.start,
-                        seg.end,
-                        pretty_chord_label(&seg.chord)
-                    );
+        //     // Chord Timeline
+        //     egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+        //         for seg in &data.chords {
+        //             let is_active = app.progress >= seg.start && app.progress < seg.end;
+        //             let text = format!(
+        //                 "{:.3} - {:.3}    {}",
+        //                 seg.start,
+        //                 seg.end,
+        //                 pretty_chord_label(&seg.chord)
+        //             );
 
-                    if is_active {
-                        ui.label(
-                            egui::RichText::new(text)
-                                .size(22.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(0, 90, 200)),
-                        );
-                    } else {
-                        ui.label(egui::RichText::new(text).size(20.0));
-                    }
-                }
-            });
-        } else {
-            ui.label(egui::RichText::new("No analyzed chord timeline yet.").size(24.0));
-        }
+        //             if is_active {
+        //                 ui.label(
+        //                     egui::RichText::new(text)
+        //                         .size(22.0)
+        //                         .strong()
+        //                         .color(egui::Color32::from_rgb(0, 90, 200)),
+        //                 );
+        //             } else {
+        //                 ui.label(egui::RichText::new(text).size(20.0));
+        //             }
+        //         }
+        //     });
+        // } else {
+        //     ui.label(egui::RichText::new("No analyzed chord timeline yet.").size(24.0));
+        // }
 
-        ui.separator();
-        ui.label(egui::RichText::new("Backend Log").size(24.0));
-        egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-            if app.backend_logs.trim().is_empty() {
-                ui.label("No backend logs yet.");
-            } else {
-                ui.code(&app.backend_logs);
-            }
-        });
+        
+        // ui.label(egui::RichText::new("Backend Log").size(24.0));
+        // egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+        //     if app.backend_logs.trim().is_empty() {
+        //         ui.label("No backend logs yet.");
+        //     } else {
+        //         ui.code(&app.backend_logs);
+        //     }
+        // });
 
         ui.add_space(8.0);
-        ui.label(egui::RichText::new("Press M to switch modes").size(25.0));
+        ui.label(egui::RichText::new("Press M to switch modes").size(20.0));
     });
 }
 
