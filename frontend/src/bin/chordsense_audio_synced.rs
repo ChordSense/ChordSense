@@ -688,28 +688,31 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
         ui.add_space(25.0);
         ui.horizontal(|ui| {
-            ui.add_space(25.0);
-            ui.heading(egui::RichText::new("Mode: Play Along").size(48.0).family(egui::FontFamily::Name("rakkas".into())));
-            ui.add_space(750.0);
-            //ui.label(egui::RichText::new("ChordSense").size(48.0).color(egui::Color32::BLACK).family(egui::FontFamily::Name("rakkas".into())),);
-            egui::Frame::new()
+            
+
+            ui.add_space(20.0);
+            ui.heading(
+                
+                egui::RichText::new("Mode: Play Along")
+                    .size(48.0)
+                    .family(egui::FontFamily::Name("rakkas".into()))
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                egui::Frame::new()
                     .fill(egui::Color32::BLACK)
-                    .stroke(egui::Stroke::new(2.0, egui::Color32::WHITE))
+                    .stroke(egui::Stroke::new(2.0, egui::Color32::BLACK))
                     .corner_radius(egui::CornerRadius::same(30))
                     .inner_margin(egui::Margin::same(10))
                     .show(ui, |ui| {
-                        ui.horizontal_centered(|ui| {
-                            ui.add_space(50.0);
-                            ui.label(
-                                egui::RichText::new("ChordSense")
-                                    .size(48.0)
-                                    .color(egui::Color32::from_rgb(240, 230, 210))
-                                    .family(egui::FontFamily::Name("rakkas".into())),
-                            );
-                            ui.add_space(50.0);
-                        });
-
+                        ui.label(
+                            egui::RichText::new("ChordSense")
+                                .size(48.0)
+                                .color(egui::Color32::WHITE)
+                                .family(egui::FontFamily::Name("rakkas".into())),
+                        );
                     });
+            });
         });
         
         ui.add_space(25.0);
@@ -785,6 +788,46 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
         //     app.chord_data.as_ref().map(|d| d.chords.len()).unwrap_or(0)
         // ));
 
+        ui.add_space(8.0);
+
+        ui.horizontal(|ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(20.0);
+                let vinyl = egui::Image::new(
+                    egui::include_image!("../../assets/icons/vinyl.png")
+                )
+                .fit_to_exact_size(egui::vec2(40.0, 40.0));
+                ui.add(vinyl);
+                ui.add_space(8.0);
+                egui::Frame::new()
+                    .fill(egui::Color32::BLACK)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::WHITE))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .inner_margin(egui::Margin::symmetric(14, 8))
+                    .show(ui, |ui| {
+                        
+
+                        
+
+                        let song_name = app
+                            .audio
+                            .as_ref()
+                            .map(|audio| audio.path_label())
+                            .unwrap_or_else(|| "No song loaded".to_string());
+
+                        ui.label(
+                            egui::RichText::new(format!("Now Playing: {}", song_name))
+                                .size(22.0)
+                                .color(egui::Color32::WHITE)
+                                .strong(),
+                        );
+                    
+                    });
+            });
+        });
+
+        ui.add_space(10.0);
+
         let back = egui::Image::new(egui::include_image!("../../assets/icons/back.png"))
             .fit_to_exact_size(egui::vec2(50.0, 50.0));
         let pause = egui::Image::new(egui::include_image!("../../assets/icons/pause.png"))
@@ -794,10 +837,10 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
 
         ui.horizontal(|ui| {
             ui.add_space(20.0);
-            let metronome = egui::Image::new(egui::include_image!("../../assets/icons/metronome.png"))
-                .fit_to_exact_size(egui::vec2(50.0, 50.0));
-            ui.add(metronome);
-            ui.add_space(9.0);
+            // let metronome = egui::Image::new(egui::include_image!("../../assets/icons/metronome.png"))
+            //     .fit_to_exact_size(egui::vec2(50.0, 50.0));
+            // ui.add(metronome);
+            // ui.add_space(9.0);
 
             let back_response = ui.add(back.sense(egui::Sense::click()));
             if back_response.clicked() {
@@ -851,6 +894,8 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
                 );
             });
         });
+
+        ui.separator();
 
         let now_pos = app.progress;
 
@@ -932,10 +977,10 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
                 );
             });
         } else {
-            let side_col_w = 200.0;
-            let center_col_w = 320.0;
-            let col_gap = 40.0;
-            let row_h = 300.0;
+            let side_col_w = 360.0;
+            let center_col_w = 360.0;
+            let col_gap = 36.0;
+            let row_h = 340.0;
 
             let total_w = side_col_w + center_col_w + side_col_w + col_gap * 2.0;
 
@@ -953,7 +998,7 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
                         |ui| {
                             if let Some(path) = &previous_image_path {
                                 let prev_image = egui::Image::new(format!("file://{}", path))
-                                    .fit_to_exact_size(egui::vec2(200.0, 240.0))
+                                    .fit_to_exact_size(egui::vec2(250.0, 280.0))
                                     .tint(egui::Color32::from_white_alpha(110));
                                 ui.add(prev_image);
                             }
@@ -969,7 +1014,7 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
                         |ui| {
                             if let Some(path) = &active_image_path {
                                 let chord_image = egui::Image::new(format!("file://{}", path))
-                                    .fit_to_exact_size(egui::vec2(300.0, 340.0));
+                                    .fit_to_exact_size(egui::vec2(350.0, 390.0));
                                 ui.add(chord_image);
                             } else if active_model_output.is_some() {
                                 egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -995,7 +1040,7 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
                         |ui| {
                             if let Some(path) = &next_image_path {
                                 let next_image = egui::Image::new(format!("file://{}", path))
-                                    .fit_to_exact_size(egui::vec2(200.0, 240.0))
+                                    .fit_to_exact_size(egui::vec2(250.0, 280.0))
                                     .tint(egui::Color32::from_white_alpha(110));
                                 ui.add(next_image);
                             }
@@ -1106,9 +1151,41 @@ fn show_sense_mode(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MyEguiApp) 
 
 fn show_record_mode(ui: &mut egui::Ui) {
     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-        ui.add_space(20.0);
-        ui.heading(egui::RichText::new("Mode: RECORD").size(90.0));
+        ui.add_space(25.0);
+        ui.horizontal(|ui| {
+            
 
+            ui.add_space(20.0);
+            ui.heading(
+                
+                egui::RichText::new("Mode: Play Along")
+                    .size(48.0)
+                    .family(egui::FontFamily::Name("rakkas".into()))
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::BLACK)
+                    .stroke(egui::Stroke::new(2.0, egui::Color32::BLACK))
+                    .corner_radius(egui::CornerRadius::same(30))
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("ChordSense")
+                                .size(48.0)
+                                .color(egui::Color32::WHITE)
+                                .family(egui::FontFamily::Name("rakkas".into())),
+                        );
+                    });
+            });
+        });
+        
+        ui.add_space(25.0);
+        ui.separator();
+        
+    
+        
+        ui.add_space(20.0);
         let rec_image = egui::Image::new(egui::include_image!("../../assets/icons/record_circle.png"))
             .fit_to_exact_size(egui::vec2(50.0, 50.0));
         ui.add(rec_image);
