@@ -22,7 +22,7 @@ Before you begin, make sure you have the following:
 For a fresh clone, use:
 
 ```bash
-git clone --recurse-submodules git@github.com:ChordSense/ChordSense.git
+git clone --recurse-submodules https://github.com/ChordSense/ChordSense.git
 cd ChordSense
 git checkout chordsense_play_along_full
 git submodule update --init --recursive
@@ -79,6 +79,7 @@ pip uninstall -y h5py numpy
 pip install "numpy<2"
 pip install --no-build-isolation "h5py==3.8.0"
 pip install -r requirements.txt
+
 sed -i 's/dtype=np.int/dtype=int/g' extractors/xhmm_ismir.py
 sed -i 's/dtype=int8/dtype=np.int8/g' extractors/xhmm_ismir.py
 
