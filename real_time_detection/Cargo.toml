@@ -1,0 +1,5 @@
+[package]
+name = "ChordSense_real_time"
+edition = '2024'
+
+[dependencies]
