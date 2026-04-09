@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+backend/venv/
+backend/model_repo/venv/
+
+# Rust
+target/
+
+# Runtime / generated outputs
+runtime/
+*.log
+outputs/**/*.lab
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Obsidian
+.obsidian/
+research/.obsidian/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Env / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Local data / artifacts
+data/
+datasets/
+artifacts/

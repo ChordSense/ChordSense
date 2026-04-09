@@ -1,0 +1,15 @@
+[package]
+name = "chordsense_ui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.33.3"
+egui = "0.33.3"
+egui_extras = { version = "0.33.3", features = ["all_loaders"] }
+image = { version = "0.25", features = ["png"] }
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "symphonia-all"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["blocking", "multipart", "json"] }
+rfd = "0.15"
