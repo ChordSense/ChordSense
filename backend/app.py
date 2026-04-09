@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request
 from werkzeug.utils import secure_filename
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_REPO = BASE_DIR / "model_repo"
+MODEL_REPO = BASE_DIR / "models/chord-cnn-lstm-model"
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
 OUTPUTS_DIR = RUNTIME_DIR / "outputs"
