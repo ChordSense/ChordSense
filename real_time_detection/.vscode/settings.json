@@ -1,0 +1,5 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/chordsense_model/.venv/bin/python",
+  "python.analysis.extraPaths": [],
+  "basedpyright.analysis.pythonPath": "${workspaceFolder}/chordsense_model/.venv/bin/python"
+}
