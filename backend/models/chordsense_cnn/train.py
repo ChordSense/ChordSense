@@ -1,8 +1,16 @@
+import sys
+from pathlib import Path
+
+_backend = Path(__file__).resolve().parent.parent.parent
+if str(_backend) not in sys.path:
+    sys.path.insert(0, str(_backend))
+
 import torch
-from model import build_model
-from torch.utils.data import DataLoader
 import torch.nn as nn
-from chord_datasets import build_datasets
+from torch.utils.data import DataLoader
+
+from models.chordsense_cnn.chord_datasets import build_datasets
+from models.chordsense_cnn.model import build_model
 
 def train(model, dataloader, criterion, optimizer, device):
     model.train() # Set model in training mode

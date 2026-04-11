@@ -1,7 +1,7 @@
 from scipy.stats import mode
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
-from config import *
+from .config import *
 import librosa
 
 def smooth_predictions(predictions, vote_window=VOTE_WINDOW):

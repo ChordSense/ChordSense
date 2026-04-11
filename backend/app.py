@@ -4,11 +4,12 @@ import tempfile
 from pathlib import Path
 
 from flask import Flask, jsonify, request
+from models.chordsense_cnn.chord_recognition import ChordRecognizer
 from werkzeug.utils import secure_filename
 
 BASE_DIR = Path(__file__).resolve().parent
 PRETRAINED_MODEL_REPO = BASE_DIR / "models/chord-cnn-lstm-model"
-CUSTOM_MODEL_REPO = BASE_DIR / "models/chordsense-cnn"
+CUSTOM_MODEL_REPO = BASE_DIR / "models/chordsense_cnn"
 
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
@@ -20,6 +21,7 @@ for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
+chord_recognizer = ChordRecognizer(PRETRAINED_MODEL_REPO / "model.pth")
 
 def parse_lab_file(lab_path: Path):
     results = []
@@ -158,23 +160,30 @@ def begin_recording():
 @app.post("/end_recording")
 def end_recording():
     print("=== /end_recording request received ===", flush=True)
+    output_lab_path = OUTPUTS_DIR / "temp.lab"
     try:
         print("Ending recording...", flush=True)
         # Stop recording audio, async (not implemented rn)
-        # result = woker.stop()
-        
+        # y_harmonics, chroma_cqt = worker.stop()
+        # chord_recognizer.from_chroma(y_harmonics, chroma_cqt)
+        # 
+        # chords = parse_lab_file(output_lab_path)
+        # duration = chords[-1]["end"] if chords else 0.0
+
+        # print(f"Model finished. Parsed {len(chords)} chords.", flush=True)
+
         return jsonify({
             "success": True,
-            "chords": "",
-            "total_chords": "",
-            "duration": "",
+            "chords": "ADD_HERE",
+            "total_chords": "ADD_HERE",
+            "duration": "ADD_HERE",
             "model_used": "chordsense-cnn",
             "model_name": "ChordSenseCNN",
-            "chord_dict": "",
+            "chord_dict": "ADD_HERE",
             "processing_time": 0.0,
-            "stdout": "",
-            "stderr": "",
-            "lab_file": "",
+            "stdout": "ADD_HERE",
+            "stderr": "ADD_HERE",
+            "lab_file": output_lab_path,
         })
     except Exception as e:
         print(f"End recording failed: {e}", flush=True)
