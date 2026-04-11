@@ -1,9 +1,10 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+from config import *
 
 class ChordCNN(nn.Module):
-    def __init__(self, num_classes: int = 25):
+    def __init__(self, num_classes: int = NUM_CLASSES):
         super().__init__()
  
         # Conv backbone: extracts chord features from chroma spectrogram
@@ -49,7 +50,7 @@ class ChordCNN(nn.Module):
         probs = F.softmax(logits, dim=1)
         return probs.argmax(dim=1), probs
 
-def build_model(num_classes: int = 25) -> ChordCNN:
+def build_model(num_classes: int = NUM_CLASSES) -> ChordCNN:
     """Create model with Kaiming initialization."""
     model = ChordCNN(num_classes)
     for m in model.modules():

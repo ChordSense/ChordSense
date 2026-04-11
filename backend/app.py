@@ -7,7 +7,9 @@ from flask import Flask, jsonify, request
 from werkzeug.utils import secure_filename
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_REPO = BASE_DIR / "models/chord-cnn-lstm-model"
+PRETRAINED_MODEL_REPO = BASE_DIR / "models/chord-cnn-lstm-model"
+CUSTOM_MODEL_REPO = BASE_DIR / "models/chordsense-cnn"
+
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
 OUTPUTS_DIR = RUNTIME_DIR / "outputs"
@@ -40,8 +42,8 @@ def parse_lab_file(lab_path: Path):
 
 
 def run_model(audio_path: Path, output_lab_path: Path, chord_dict: str):
-    script_path = MODEL_REPO / "chord_recognition.py"
-    venv_python = MODEL_REPO / "venv" / "bin" / "python"
+    script_path = PRETRAINED_MODEL_REPO / "chord_recognition.py"
+    venv_python = PRETRAINED_MODEL_REPO / "venv" / "bin" / "python"
 
     if not script_path.exists():
         raise RuntimeError(f"Missing model script: {script_path}")
@@ -58,7 +60,7 @@ def run_model(audio_path: Path, output_lab_path: Path, chord_dict: str):
 
     proc = subprocess.run(
         cmd,
-        cwd=str(MODEL_REPO),
+        cwd=str(PRETRAINED_MODEL_REPO),
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -82,7 +84,8 @@ def health():
     return jsonify({
         "success": True,
         "message": "ChordSenseOfficial backend running",
-        "model_repo": str(MODEL_REPO),
+        "pretrained_model_repo": str(PRETRAINED_MODEL_REPO),
+        "custom_model_repo": str(CUSTOM_MODEL_REPO),
     })
 
 
@@ -141,6 +144,41 @@ def analyze():
         print(f"Analyze failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.post("/begin_recording")
+def begin_recording():
+    print("=== /begin_recording request received ===", flush=True)
+    try:
+        print("Starting recording...", flush=True)
+        # Start recording audio, async (not implemented rn)
+        return jsonify({"success": True, "message": "Recording started"})
+    except Exception as e:
+        print(f"Begin recording failed: {e}", flush=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.post("/end_recording")
+def end_recording():
+    print("=== /end_recording request received ===", flush=True)
+    try:
+        print("Ending recording...", flush=True)
+        # Stop recording audio, async (not implemented rn)
+        # result = woker.stop()
+        
+        return jsonify({
+            "success": True,
+            "chords": "",
+            "total_chords": "",
+            "duration": "",
+            "model_used": "chordsense-cnn",
+            "model_name": "ChordSenseCNN",
+            "chord_dict": "",
+            "processing_time": 0.0,
+            "stdout": "",
+            "stderr": "",
+            "lab_file": "",
+        })
+    except Exception as e:
+        print(f"End recording failed: {e}", flush=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5051, debug=False)
