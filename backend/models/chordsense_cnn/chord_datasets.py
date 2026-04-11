@@ -1,7 +1,7 @@
 from torch.utils.data import Dataset
 import torch
 import numpy as np
-from audio_processing import slice_into_windows, extract_chroma_cqt
+from .audio_processing import extract_chroma_cqt, slice_into_windows
 import os
 from collections import defaultdict
 import random

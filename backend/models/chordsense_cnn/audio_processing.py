@@ -1,6 +1,6 @@
 import librosa
 import numpy as np
-from config import *
+from .config import *
 
 def extract_chroma_cqt(source):
     if isinstance(source, str):

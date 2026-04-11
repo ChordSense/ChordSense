@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-from config import *
+from .config import *
 
 class ChordCNN(nn.Module):
     def __init__(self, num_classes: int = NUM_CLASSES):

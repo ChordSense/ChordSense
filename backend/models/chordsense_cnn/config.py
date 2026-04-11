@@ -10,3 +10,4 @@ CHORD_CLASSES = ['A', 'A#', 'A#m', 'Am', 'B', 'Bm', 'C', 'C#', 'C#m', 'Cm', 'D',
 VOTE_WINDOW = 9
 POST_ONSESET_OFFSET = 2
 POST_ONSESET_LENGTH = 5
+RECORDING_OUTPUT_FILE = "temp.lab"
