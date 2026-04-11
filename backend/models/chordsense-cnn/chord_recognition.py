@@ -36,3 +36,4 @@ class ChordRecognizer:
     return True
 
   def generate_lab_file(self, model_predictions: dict):
+    pass
