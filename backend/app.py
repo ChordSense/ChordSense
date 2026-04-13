@@ -6,6 +6,7 @@ from pathlib import Path
 from flask import Flask, jsonify, request
 #from models.chordsense_cnn.chord_recognition import ChordRecognizer
 from werkzeug.utils import secure_filename
+from guitar_input import Worker
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_REPO = BASE_DIR / "model_repo"
@@ -19,6 +20,8 @@ for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
+chord_recognizer = ChordRecognizer(PRETRAINED_MODEL_REPO / "model.pth")
+worker = Worker()
 
 def parse_lab_file(lab_path: Path):
     results = []
@@ -151,7 +154,7 @@ def begin_recording():
     print("=== /begin_recording request received ===", flush=True)
     try:
         print("Starting recording...", flush=True)
-        # Start recording audio, async (not implemented rn)
+        worker.start()
         return jsonify({"success": True, "message": "Recording started"})
     except Exception as e:
         print(f"Begin recording failed: {e}", flush=True)
@@ -165,14 +168,17 @@ def end_recording():
 
     try:
         print("Ending recording...", flush=True)
+        # Stop recording audio, async (not implemented rn)
+        chroma_cqt, y_harmonics = worker.stop()
 
-        if not output_lab_path.exists():
-            raise FileNotFoundError(f"Temp lab file not found: {output_lab_path}")
-
+        if chroma is None:
+            return jsonify({"success": False, "error": "No frames captured"}), 400
+        chord_recognizer.from_chroma(y_harmonics, chroma_cqt)
+        
         chords = parse_lab_file(output_lab_path)
         duration = chords[-1]["end"] if chords else 0.0
 
-        print(f"Loaded temp .lab successfully. Parsed {len(chords)} chords.", flush=True)
+        print(f"Model finished. Parsed {len(chords)} chords.", flush=True)
 
         return jsonify({
             "success": True,
