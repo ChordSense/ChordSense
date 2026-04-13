@@ -4,14 +4,12 @@ import tempfile
 from pathlib import Path
 
 from flask import Flask, jsonify, request
-from models.chordsense_cnn.chord_recognition import ChordRecognizer
+#from models.chordsense_cnn.chord_recognition import ChordRecognizer
 from werkzeug.utils import secure_filename
 from guitar_input import Worker
 
 BASE_DIR = Path(__file__).resolve().parent
-PRETRAINED_MODEL_REPO = BASE_DIR / "models/chord-cnn-lstm-model"
-CUSTOM_MODEL_REPO = BASE_DIR / "models/chordsense_cnn"
-
+MODEL_REPO = BASE_DIR / "model_repo"
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
 OUTPUTS_DIR = RUNTIME_DIR / "outputs"
@@ -46,8 +44,12 @@ def parse_lab_file(lab_path: Path):
 
 
 def run_model(audio_path: Path, output_lab_path: Path, chord_dict: str):
-    script_path = PRETRAINED_MODEL_REPO / "chord_recognition.py"
-    venv_python = PRETRAINED_MODEL_REPO / "venv" / "bin" / "python"
+    script_path = MODEL_REPO / "chord_recognition.py"
+
+    if os.name == "nt":
+        venv_python = MODEL_REPO / "venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = MODEL_REPO / "venv" / "bin" / "python"
 
     if not script_path.exists():
         raise RuntimeError(f"Missing model script: {script_path}")
@@ -64,7 +66,7 @@ def run_model(audio_path: Path, output_lab_path: Path, chord_dict: str):
 
     proc = subprocess.run(
         cmd,
-        cwd=str(PRETRAINED_MODEL_REPO),
+        cwd=str(MODEL_REPO),
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -88,8 +90,7 @@ def health():
     return jsonify({
         "success": True,
         "message": "ChordSenseOfficial backend running",
-        "pretrained_model_repo": str(PRETRAINED_MODEL_REPO),
-        "custom_model_repo": str(CUSTOM_MODEL_REPO),
+        "model_repo": str(MODEL_REPO),
     })
 
 
@@ -162,7 +163,9 @@ def begin_recording():
 @app.post("/end_recording")
 def end_recording():
     print("=== /end_recording request received ===", flush=True)
+    # Change the line below
     output_lab_path = OUTPUTS_DIR / "temp.lab"
+
     try:
         print("Ending recording...", flush=True)
         # Stop recording audio, async (not implemented rn)
@@ -184,15 +187,16 @@ def end_recording():
             "duration": duration,
             "model_used": "chordsense-cnn",
             "model_name": "ChordSenseCNN",
-            "chord_dict": "ADD_HERE",
+            "chord_dict": "submission",
             "processing_time": 0.0,
-            "stdout": "ADD_HERE",
-            "stderr": "ADD_HERE",
-            "lab_file": output_lab_path,
+            "stdout": "",
+            "stderr": "",
+            "lab_file": str(output_lab_path),
         })
     except Exception as e:
         print(f"End recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
+    
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5051, debug=False)
