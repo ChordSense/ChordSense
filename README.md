@@ -12,8 +12,8 @@ ChordSenseOfficial is set up as a multi-part project with:
 Before you begin, make sure you have the following:
 
 - Git
-- Python 3.10
-- `venv` support for Python 3.10
+- Python 3.10+
+- `venv` support for Python 3.10+
 - Rust and Cargo
 - Linux build dependencies for audio / Rust tooling
 
