@@ -25,8 +25,7 @@ def find_esp_port():
     print("Could not auto-detect ESP port. Available ports:")
     for i, p in enumerate(ports):
         print(f"  [{i}] {p.device} — {p.description}")
-    index = int(input("Enter port number: "))
-    return ports[index].device
+    return ports[0].device
 
 def find_marker(ser):
     buf = b''

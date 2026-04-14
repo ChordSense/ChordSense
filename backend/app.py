@@ -4,15 +4,17 @@ import tempfile
 from pathlib import Path
 
 from flask import Flask, jsonify, request
-#from models.chordsense_cnn.chord_recognition import ChordRecognizer
+from models.chordsense_cnn.chord_recognition import ChordRecognizer
 from werkzeug.utils import secure_filename
 from guitar_input import Worker
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_REPO = BASE_DIR / "model_repo"
+PRETRAINED_MODEL_REPO = BASE_DIR / "models/chord-cnn-lstm-model"
+CUSTOM_MODEL_REPO = BASE_DIR / "models/chordsense_cnn"
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
 OUTPUTS_DIR = RUNTIME_DIR / "outputs"
+
 
 for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
@@ -20,7 +22,7 @@ for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
-chord_recognizer = ChordRecognizer(PRETRAINED_MODEL_REPO / "model.pth")
+chord_recognizer = ChordRecognizer(CUSTOM_MODEL_REPO / "checkpoints/latest_chord_cnn.pth")
 worker = Worker()
 
 def parse_lab_file(lab_path: Path):
@@ -44,12 +46,12 @@ def parse_lab_file(lab_path: Path):
 
 
 def run_model(audio_path: Path, output_lab_path: Path, chord_dict: str):
-    script_path = MODEL_REPO / "chord_recognition.py"
+    script_path = PRETRAINED_MODEL_REPO / "chord_recognition.py"
 
     if os.name == "nt":
-        venv_python = MODEL_REPO / "venv" / "Scripts" / "python.exe"
+        venv_python = PRETRAINED_MODEL_REPO / "venv" / "Scripts" / "python.exe"
     else:
-        venv_python = MODEL_REPO / "venv" / "bin" / "python"
+        venv_python = PRETRAINED_MODEL_REPO / "venv" / "bin" / "python"
 
     if not script_path.exists():
         raise RuntimeError(f"Missing model script: {script_path}")
@@ -66,7 +68,7 @@ def run_model(audio_path: Path, output_lab_path: Path, chord_dict: str):
 
     proc = subprocess.run(
         cmd,
-        cwd=str(MODEL_REPO),
+        cwd=str(PRETRAINED_MODEL_REPO),
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -90,7 +92,7 @@ def health():
     return jsonify({
         "success": True,
         "message": "ChordSenseOfficial backend running",
-        "model_repo": str(MODEL_REPO),
+        "model_repo": str(PRETRAINED_MODEL_REPO),
     })
 
 
@@ -171,9 +173,9 @@ def end_recording():
         # Stop recording audio, async (not implemented rn)
         chroma_cqt, y_harmonics = worker.stop()
 
-        if chroma is None:
+        if chroma_cqt is None:
             return jsonify({"success": False, "error": "No frames captured"}), 400
-        chord_recognizer.from_chroma(y_harmonics, chroma_cqt)
+        chord_recognizer.from_chroma(y_harmonics, chroma_cqt, output_lab_path)
         
         chords = parse_lab_file(output_lab_path)
         duration = chords[-1]["end"] if chords else 0.0
