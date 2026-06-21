@@ -43,8 +43,10 @@ ChordSense/
 ├── backend/
 │   ├── app.py
 │   ├── requirements.txt
-│   └── model_repo/
-│       └── requirements.txt
+│   └── models/
+│       └── chord-cnn-lstm-model/
+│           └── requirements.txt
+|       └── chordsense-cnn/
 └── frontend/
 ```
 
@@ -68,7 +70,7 @@ deactivate
 The backend currently expects the model repository to use its own separate Python virtual environment.
 
 ```bash
-cd model_repo
+cd models/chord-cnn-lstm-model
 python3.10 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip setuptools wheel
@@ -131,7 +133,7 @@ cargo run --bin chordsense_audio_synced
 
 ## Notes
 
-- The backend and `model_repo` use separate Python environments.
+- The backend and the models use separate Python environments.
 - If the frontend fails to build after installing Rust, reload your shell or run:
 
 ```bash

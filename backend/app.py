@@ -4,7 +4,9 @@ import tempfile
 from pathlib import Path
 
 from flask import Flask, jsonify, request
+#from models.chordsense_cnn.chord_recognition import ChordRecognizer
 from werkzeug.utils import secure_filename
+from guitar_input import Worker
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_REPO = BASE_DIR / "model_repo"
@@ -18,6 +20,8 @@ for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
+chord_recognizer = ChordRecognizer(PRETRAINED_MODEL_REPO / "model.pth")
+worker = Worker()
 
 def parse_lab_file(lab_path: Path):
     results = []
@@ -41,7 +45,11 @@ def parse_lab_file(lab_path: Path):
 
 def run_model(audio_path: Path, output_lab_path: Path, chord_dict: str):
     script_path = MODEL_REPO / "chord_recognition.py"
-    venv_python = MODEL_REPO / "venv" / "bin" / "python"
+
+    if os.name == "nt":
+        venv_python = MODEL_REPO / "venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = MODEL_REPO / "venv" / "bin" / "python"
 
     if not script_path.exists():
         raise RuntimeError(f"Missing model script: {script_path}")
@@ -141,6 +149,54 @@ def analyze():
         print(f"Analyze failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.post("/begin_recording")
+def begin_recording():
+    print("=== /begin_recording request received ===", flush=True)
+    try:
+        print("Starting recording...", flush=True)
+        worker.start()
+        return jsonify({"success": True, "message": "Recording started"})
+    except Exception as e:
+        print(f"Begin recording failed: {e}", flush=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.post("/end_recording")
+def end_recording():
+    print("=== /end_recording request received ===", flush=True)
+    # Change the line below
+    output_lab_path = OUTPUTS_DIR / "temp.lab"
+
+    try:
+        print("Ending recording...", flush=True)
+        # Stop recording audio, async (not implemented rn)
+        chroma_cqt, y_harmonics = worker.stop()
+
+        if chroma is None:
+            return jsonify({"success": False, "error": "No frames captured"}), 400
+        chord_recognizer.from_chroma(y_harmonics, chroma_cqt)
+        
+        chords = parse_lab_file(output_lab_path)
+        duration = chords[-1]["end"] if chords else 0.0
+
+        print(f"Model finished. Parsed {len(chords)} chords.", flush=True)
+
+        return jsonify({
+            "success": True,
+            "chords": chords,
+            "total_chords": len(chords),
+            "duration": duration,
+            "model_used": "chordsense-cnn",
+            "model_name": "ChordSenseCNN",
+            "chord_dict": "submission",
+            "processing_time": 0.0,
+            "stdout": "",
+            "stderr": "",
+            "lab_file": str(output_lab_path),
+        })
+    except Exception as e:
+        print(f"End recording failed: {e}", flush=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+    
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5051, debug=False)
