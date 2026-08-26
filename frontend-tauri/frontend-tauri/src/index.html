@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    />
+
+    <title>ChordSense</title>
+
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/record.css" />
+
+    <script type="module" src="/main.js"></script>
+</head>
+
+<body>
+
+<main class="app">
+
+    <!-- HEADER -->
+    <header class="app-header">
+
+        <h1 id="mode-title">
+            Mode: Play Along
+        </h1>
+
+        <nav class="mode-switcher">
+            <button
+                id="play-mode-button"
+                class="mode-tab active"
+            >
+                Play Along
+            </button>
+
+            <button
+                id="record-mode-button"
+                class="mode-tab"
+            >
+                Record
+            </button>
+        </nav>
+
+        <div class="logo">
+            ChordSense
+        </div>
+
+    </header>
+
+    <div class="divider"></div>
+
+    <section id="play-mode" class="mode-view"> <!-- wrap all the play along stuff in here -->
+
+        <!-- LOAD / ANALYZE -->
+        <section class="toolbar">
+
+            <button id="load-audio">
+                Load Audio
+            </button>
+
+            <button id="analyze">
+                Analyze
+            </button>
+
+            <label class="volume-control">
+                Volume
+
+                <input
+                    id="volume"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value="0.8"
+                />
+            </label>
+
+        </section>
+
+        <p id="status"></p>
+
+        <!-- NOW PLAYING -->
+        <section class="now-playing">
+            <img
+                src="assets/icons/vinyl.png"
+                alt=""
+                class="vinyl-icon"
+            />
+
+            <div class="song-pill">
+                Now Playing:
+                <strong id="song-name">
+                    No song loaded
+                </strong>
+            </div>
+        </section>
+
+        <!-- PLAYER -->
+        <section class="player">
+
+            <button
+                id="stop"
+                class="icon-button"
+                aria-label="Stop"
+            >
+                <img src="assets/icons/back.png" alt="" />
+            </button>
+
+            <button
+                id="play-pause"
+                class="icon-button"
+                aria-label="Play"
+            >
+                <img
+                    id="play-pause-image"
+                    src="assets/icons/play-button.png"
+                    alt=""
+                />
+            </button>
+
+            <div class="timeline">
+
+                <input
+                    id="seek"
+                    type="range"
+                    min="0"
+                    max="0"
+                    step="0.01"
+                    value="0"
+                />
+
+                <span id="time-display">
+                    00:00 / 00:00
+                </span>
+
+            </div>
+
+        </section>
+
+        <div class="divider"></div>
+
+        <!-- CHORD DISPLAY -->
+        <section
+            id="empty-state"
+            class="empty-state"
+        >
+            Please Load a Song<br />
+            of Choice to Play<br />
+            Along to!
+        </section>
+
+        <section
+            id="chord-display"
+            class="chord-display hidden"
+        >
+            <!-- These never move -->
+            <div class="chord-role-row">
+                <span class="chord-role">
+                    Previous
+                </span>
+
+                <span class="chord-role current-role">
+                    Current
+                </span>
+
+                <span class="chord-role">
+                    Next
+                </span>
+            </div>
+
+            <!-- Only this portion moves -->
+            <div class="carousel-viewport">
+
+                <div
+                    id="chord-track"
+                    class="chord-track"
+                >
+                    <article class="carousel-card previous-card">
+                        <img
+                            id="previous-image"
+                            class="chord-image"
+                            alt=""
+                        />
+
+                        <span
+                            id="previous-label"
+                            class="chord-label"
+                        ></span>
+                    </article>
+
+                    <article class="carousel-card current-card">
+                        <img
+                            id="current-image"
+                            class="chord-image"
+                            alt=""
+                        />
+
+                        <span
+                            id="current-label"
+                            class="chord-label"
+                        ></span>
+                    </article>
+
+                    <article class="carousel-card next-card">
+                        <img
+                            id="next-image"
+                            class="chord-image"
+                            alt=""
+                        />
+
+                        <span
+                            id="next-label"
+                            class="chord-label"
+                        ></span>
+                    </article>
+
+                    <!-- waits just off screen -->
+                    <article class="carousel-card incoming-card">
+                        <img
+                            id="incoming-image"
+                            class="chord-image"
+                            alt=""
+                        />
+
+                        <span
+                            id="incoming-label"
+                            class="chord-label"
+                        ></span>
+                    </article>
+                </div>
+
+            </div>
+        </section>
+    </section>
+
+    <section id="record-mode" class="mode-view hidden">
+        <div class="record-container">
+            <div class="record-panel">
+                <div id="record-indicator" class="record-indicator"></div>
+                <p class="record-eyebrow">
+                    LIVE INPUT
+                </p>
+
+                <h2 id="record-title">Ready to Record</h2>
+
+                <p id="record-detail">Press Start Recording when you're ready to play.</p>
+
+                <div id="record-countdown" class="record-countdown hidden">
+                    4
+                </div>
+
+                <div id="record-timer" class="record-timer hidden">
+                    00:00
+                </div>
+            </div>
+
+            <div class="record-controls">
+
+                <button id="start-recording" class="record-button primary">
+                    Start Recording
+                </button>
+
+                <button id="stop-recording" class="record-button secondary" disabled>
+                    Stop Recording
+                </button>
+
+            </div>
+
+
+            <p id="record-status" class="record-status">
+                Ready to record.
+            </p>
+
+        </div>
+
+    </section>
+
+    <!-- actual audio engine -->
+    <audio id="audio-player"></audio>
+
+</main>
+
+</body>
+</html>
