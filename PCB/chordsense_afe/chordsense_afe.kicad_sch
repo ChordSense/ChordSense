@@ -6032,7 +6032,7 @@
 				)
 			)
 		)
-		(property "Footprint" "PDB182-K425K-103A:Bourns-PDB182-K425K-103A-0"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical"
 			(at 76.2 127 0)
 			(hide yes)
 			(show_name no)
@@ -6294,7 +6294,7 @@
 				)
 			)
 		)
-		(property "Footprint" "PDB182-K425K-103A:Bourns-PDB182-K425K-103A-0"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical"
 			(at 76.2 162.56 0)
 			(hide yes)
 			(show_name no)
@@ -7384,7 +7384,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "SJ3-35053B:SAMESKY_SJ3-35053B"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical"
 			(at 227.33 129.54 0)
 			(hide yes)
 			(show_name no)
