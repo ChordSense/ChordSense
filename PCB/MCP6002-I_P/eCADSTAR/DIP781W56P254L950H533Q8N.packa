@@ -1,0 +1,13 @@
+(unit MM)
+
+(package "MCP6002-I_P"
+    (type UNDEF)
+    (uver 2)
+    (cuser "SamacSys")
+    (uuser "SamacSys")
+    (utime 2019-07-21-05:54:33)
+    (mountForm default
+        (footprintRef "DIP781W56P254L950H533Q8N")
+        (spec "System")
+    )
+)

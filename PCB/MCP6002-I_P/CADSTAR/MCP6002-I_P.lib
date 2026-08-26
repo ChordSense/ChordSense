@@ -1,0 +1,18 @@
+.MCP6002-I_P :1 ;Operational Amplifiers - Op Amps Dual 1.8V 1MHz
+DIP781W56P254L950H533Q8N
+*STM IC
+*NGS
+*PLB 1="VOUTA" 2="VINA-" 3="VINA+" 4="VSS" 5="VINB+" 6="VINB-" 7="VOUTB" 8="VDD"
+*MXP 8
+*DFN MCP6002-I_P
+~!Manufacturer_Name (Microchip)
+~!Manufacturer_Part_Number (MCP6002-I/P)
+~!Mouser Part Number (579-MCP6002-I/P)
+~!Link Mouser Price/Stock (https://www.mouser.co.uk/ProductDetail/Microchip-Technology/MCP6002-I-P?qs=Ux5rHyN1IXStLRM979v6Rg%3D%3D)
+~!Arrow Part Number (MCP6002-I/P)
+~!Link Arrow Price/Stock (https://www.arrow.com/en/products/mcp6002-ip/microchip-technology.html?utm_currency=USD&region=asia)
+~!Link Datasheet (https://www.mouser.com/datasheet/2/268/21733j-740845.pdf)
+~!Height (5.334mm)
+~!3D_Model (MCP6002-I_P)
+MCP6002-I_P
+1.1!U 2.1!U 3.1!U 4.1!U 8.1!U 7.1!U 6.1!U 5.1!U 

@@ -1,0 +1,9 @@
+Manufacturer=Microchip
+PartNumber=MCP6002-I/P
+PartCategory=Integrated Circuit
+PackageCategory=Dual-In-Line Packages
+PinCount=8
+Version=1.1
+Released=2020-01-23 10:30:56
+Downloaded=2026-08-26 01:11:52
+3D=Y

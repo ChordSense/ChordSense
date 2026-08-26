@@ -1,0 +1,11 @@
+FILE_TYPE = MULTI_PHYS_TABLE;
+
+PART 'MCP6002_I_P'
+CLASS = IC
+{========================================================================================}
+:"MANUFACTURER_NAME", "MANUFACTURER_PART_NUMBER"= "PART_NUMBER", "JEDEC_TYPE", "PACK_TYPE", "MOUSER_PART_NUMBER", "MOUSER_PRICE/STOCK", "ARROW_PART_NUMBER", "ARROW_PRICE/STOCK", "DESCRIPTION", "DATASHEET", "HEIGHT";
+{========================================================================================}
+ "Microchip", "MCP6002-I/P" (!) = "", "DIP781W56P254L950H533Q8N", "Dual-In-Line Packages", "579-MCP6002-I/P", "https://www.mouser.co.uk/ProductDetail/Microchip-Technology/MCP6002-I-P?qs=Ux5rHyN1IXStLRM979v6Rg%3D%3D", "MCP6002-I/P", "https://www.arrow.com/en/products/mcp6002-ip/microchip-technology.html?utm_currency=USD&region=asia", "Operational Amplifiers - Op Amps Dual 1.8V 1MHz", "https://www.mouser.com/datasheet/2/268/21733j-740845.pdf", "5.334 mm"
+END_PART
+
+END.

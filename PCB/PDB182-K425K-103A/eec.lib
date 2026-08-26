@@ -1,0 +1,53 @@
+EESchema-LIBRARY Version 2.4
+#encoding utf-8
+#
+# Bourns PDB182-K425K-103A
+#
+DEF PDB182-K425K-103A VR 0 40 Y Y 2 L N
+F0 "VR" 0 300 50 H V L CNN 
+F1 "PDB182-K425K-103A" 0 400 50 H V L CNN 
+F2 "Bourns-PDB182-K425K-103A-*" 0 500 50 H I L CNN 
+F3 "https://upverter.com/datasheet/45204b265b9cbc8491a84e7ee301f7b0b3ef43ef.pdf" 0 600 50 H I L CNN 
+F4 "±20%" 0 700 50 H I L CNN "Tolerance"
+F5 "Res" 0 800 50 H I L CNN "category"
+F6 "POT 10K OHM 0.06W CARBON LOG" 0 900 50 H I L CNN "digikey description"
+F7 "PDB182-K425K-103A-ND" 0 1000 50 H I L CNN "digikey part number"
+F8 "yes" 0 1100 50 H I L CNN "lead free"
+F9 "7555a5f5f21f0cca" 0 1200 50 H I L CNN "library id"
+F10 "Bourns" 0 1300 50 H I L CNN "manufacturer"
+F11 "652-PDB182-K425K103A" 0 1400 50 H I L CNN "mouser part number"
+F12 "PTH_VR_36MM5_17MM" 0 1500 50 H I L CNN "package"
+F13 "60mW" 0 1600 50 H I L CNN "power"
+F14 "10k" 0 1700 50 H I L CNN "resistance"
+F15 "yes" 0 1800 50 H I L CNN "rohs"
+F16 "+50°C" 0 1900 50 H I L CNN "temperature range high"
+F17 "-10°C" 0 2000 50 H I L CNN "temperature range low"
+DRAW
+X R1_3 3 600 0 100 L 40 0 1 1 U 
+X R1_1 1 100 0 100 R 40 0 1 1 U 
+X R1_2 2 300 200 130 D 40 0 1 1 U 
+P 2 1 1 0 500 0 470 -50 N
+P 2 1 1 0 470 -50 420 50 N
+P 2 1 1 0 420 50 370 -50 N
+P 2 1 1 0 370 -50 320 50 N
+P 2 1 1 0 320 50 270 -50 N
+P 2 1 1 0 270 -50 220 50 N
+P 2 1 1 0 220 50 200 0 N
+P 2 1 1 0 300 70 330 110 N
+P 2 1 1 0 300 70 270 110 N
+X R2_3 6 600 0 100 L 40 0 2 1 U 
+X R2_1 4 100 0 100 R 40 0 2 1 U 
+X R2_2 5 300 200 130 D 40 0 2 1 U 
+P 2 2 1 0 500 0 470 -50 N
+P 2 2 1 0 470 -50 420 50 N
+P 2 2 1 0 420 50 370 -50 N
+P 2 2 1 0 370 -50 320 50 N
+P 2 2 1 0 320 50 270 -50 N
+P 2 2 1 0 270 -50 220 50 N
+P 2 2 1 0 220 50 200 0 N
+P 2 2 1 0 300 70 330 110 N
+P 2 2 1 0 300 70 270 110 N
+ENDDRAW
+ENDDEF
+#
+# End Library

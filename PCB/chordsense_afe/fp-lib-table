@@ -1,0 +1,5 @@
+(fp_lib_table
+	(version 7)
+	(lib (name "ACJS-MHDR") (type "KiCad") (uri "C:/Users/micha/workspace/chordsense/ChordSense/PCB/ACJS_MHDR/footprints.pretty") (options "") (descr ""))
+	(lib (name "chordsense_custom") (type "KiCad") (uri "${KIPRJMOD}/chordsense_custom.pretty") (options "") (descr ""))
+)

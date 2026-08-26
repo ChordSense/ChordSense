@@ -1,0 +1,8 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "ACJS-MHDR") (type "KiCad") (uri "C:/Users/micha/workspace/chordsense/ChordSense/PCB/ACJS_MHDR/2026-08-25_23-40-59.kicad_sym") (options "") (descr ""))
+	(lib (name "MCP6002") (type "KiCad") (uri "C:/Users/micha/workspace/chordsense/ChordSense/PCB/MCP6002-I_P/KiCad/MCP6002-I_P.kicad_sym") (options "") (descr ""))
+	(lib (name "PDB182-K425K-103A") (type "Legacy") (uri "C:/Users/micha/workspace/chordsense/ChordSense/PCB/PDB182-K425K-103A/eec.lib") (options "") (descr ""))
+	(lib (name "SJ3-35053") (type "KiCad") (uri "C:/Users/micha/workspace/chordsense/ChordSense/PCB/SJ3_35053B/SJ3-35053B.kicad_sym") (options "") (descr ""))
+	(lib (name "chordsense_custom") (type "KiCad") (uri "C:/Users/micha/workspace/chordsense/ChordSense/PCB/ChordSense_Custom/chordsense_custome.kicad_sym") (options "") (descr ""))
+)
