@@ -8,6 +8,7 @@ name = "chordsense-iod"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
 spidev = "0.7"
 hound = "3.5"
 rodio = { version = "0.22.2", default-features = false, features = ["playback", "symphonia-all", "experimental"] }
