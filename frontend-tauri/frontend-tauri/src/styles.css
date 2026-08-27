@@ -1,0 +1,558 @@
+@font-face {
+    font-family: "Rakkas";
+    src: url("/fonts/Rakkas-Regular.ttf")
+        format("truetype");
+}
+
+:root {
+    font-family:
+        Inter,
+        Arial,
+        sans-serif;
+
+    color: #111;
+
+    background: #f0e6d2;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    background: #f0e6d2;
+}
+
+.app {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+
+    padding:
+        clamp(16px, 2vh, 32px)
+        clamp(18px, 3vw, 56px)
+        clamp(20px, 3vh, 48px);
+}
+
+/* HEADER */
+
+.app-header {
+    display: flex;
+
+    align-items: center;
+    justify-content: space-between;
+}
+
+.app-header h1 {
+    font-size: clamp(30px, 3vw, 56px);
+}
+
+.logo {
+
+    border-radius: 28px;
+
+    background: #000;
+    color: #fff;
+
+    font-family: "Rakkas", serif;
+    font-size: clamp(28px, 3vw, 54px);
+
+    padding:
+        clamp(4px, 0.7vh, 10px)
+        clamp(14px, 1.8vw, 28px);
+}
+
+.divider {
+    height: 2px;
+
+    margin: clamp(12px, 2vh, 28px) 0;
+
+    background:
+        rgba(0, 0, 0, 0.55);
+}
+
+/* TOOLBAR */
+
+.toolbar {
+    display: flex;
+
+    align-items: center;
+    gap: clamp(8px, 1vw, 18px);
+}
+
+.toolbar button {
+    border: 0;
+    border-radius: 8px;
+
+    padding:
+      clamp(8px, 1vh, 13px)
+      clamp(14px, 1.5vw, 26px);
+
+    background: #000;
+    color: #fff;
+
+    cursor: pointer;
+
+    transition:
+        transform 120ms ease,
+        opacity 120ms ease;
+    font-size:
+        clamp(14px, 1.2vw, 18px);
+}
+
+.toolbar button:hover {
+    transform:
+        translateY(-1px);
+}
+
+.toolbar button:active {
+    transform:
+        translateY(1px);
+}
+
+.toolbar button:disabled {
+    opacity: 0.45;
+
+    cursor: default;
+}
+
+.volume-control {
+    display: flex;
+
+    align-items: center;
+    gap: 10px;
+
+    margin-left: 12px;
+}
+
+/* STATUS */
+
+#status {
+    min-height: 24px;
+
+    margin:
+        12px 0;
+}
+
+/* NOW PLAYING */
+
+.now-playing {
+    display: flex;
+
+    align-items: center;
+    gap: 12px;
+
+    margin-top: 14px;
+}
+
+.vinyl-icon {
+    width: clamp(30px, 3vw, 48px);
+    height: clamp(30px, 3vw, 48px);
+}
+
+.song-pill {
+    padding:
+        clamp(7px, 1vh, 12px)
+        clamp(12px, 1.5vw, 22px);
+
+    border-radius: 14px;
+
+    background: #000;
+    color: #fff;
+
+    font-size: clamp(15px, 1.4vw, 22px);
+}
+
+/* PLAYER */
+
+.player {
+    display: flex;
+
+    align-items: center;
+    gap: 16px;
+
+    margin-top: 18px;
+}
+
+.icon-button {
+    display: grid;
+
+    width: clamp(44px, 4vw, 64px);
+    height: clamp(44px, 4vw, 64px);
+
+    place-items: center;
+
+    border: 0;
+
+    background: transparent;
+
+    cursor: pointer;
+
+    transition:
+        transform 150ms ease;
+}
+
+.icon-button:hover {
+    transform:
+        scale(1.08);
+}
+
+.icon-button:active {
+    transform:
+        scale(0.95);
+}
+
+.icon-button img {
+    width: clamp(38px, 3.5vw, 56px);
+    height: clamp(38px, 3.5vw, 56px);
+}
+
+.timeline {
+    display: flex;
+
+    flex-direction: column;
+    gap: 5px;
+
+    width: clamp(260px, 45vw, 700px);
+}
+
+.timeline input {
+    width: 100%;
+}
+
+#time-display {
+  font-size: clamp(14px, 1.3vw, 20px);
+}
+
+/* EMPTY STATE */
+
+.empty-state {
+    display: grid;
+
+    min-height: clamp(220px, 42vh, 520px);
+
+    place-items: center;
+
+    text-align: center;
+
+    font-family: "Rakkas", serif;
+    font-size: clamp(28px, 3.2vw, 54px);
+    line-height: 1.05;
+}
+
+/* CHORDS */
+
+/* ========================================
+   CHORD DISPLAY
+   ======================================== */
+
+.chord-display {
+    width: min(94vw, 1500px);
+
+    margin:
+        clamp(10px, 2vh, 24px)
+        auto 0;
+}
+
+
+/* Stationary labels */
+
+.chord-role-row {
+    display: grid;
+
+    grid-template-columns:
+        repeat(3, 1fr);
+
+    align-items: center;
+
+    width: 100%;
+
+    margin-bottom:
+        clamp(10px, 1.5vh, 20px);
+}
+
+.chord-role {
+    justify-self: center;
+
+    position: relative;
+    z-index: 10;
+
+    padding:
+        clamp(7px, 0.8vh, 11px)
+        clamp(16px, 1.5vw, 26px);
+
+    border:
+        2px solid
+        rgba(0, 0, 0, 0.75);
+
+    border-radius: 999px;
+
+    background:
+        rgba(255, 255, 255, 0.35);
+
+    color: #111;
+
+    font-size:
+        clamp(14px, 1.2vw, 20px);
+
+    font-weight: 800;
+
+    letter-spacing: 0.14em;
+
+    text-transform: uppercase;
+
+    box-shadow:
+        0 5px 14px
+        rgba(0, 0, 0, 0.08);
+}
+
+.chord-role.current-role {
+    background: #000;
+
+    color: #f0e6d2;
+
+    border-color: #000;
+
+    transform:
+        scale(1.08);
+
+    box-shadow:
+        0 8px 20px
+        rgba(0, 0, 0, 0.18);
+}
+
+
+/* ========================================
+   CAROUSEL
+   ======================================== */
+
+.carousel-viewport {
+    width: 100%;
+
+    overflow: hidden;
+
+    min-height:
+        clamp(260px, 43vh, 520px);
+}
+
+
+.chord-track {
+    display: grid;
+
+    grid-template-columns:
+        repeat(4, 1fr);
+
+    width: calc(100% * 4 / 3);
+
+    transform:
+        translate3d(0, 0, 0);
+
+    transition:
+        transform
+        520ms
+        cubic-bezier(0.22, 1, 0.36, 1);
+
+    will-change: transform;
+}
+
+
+.chord-track.rolling {
+    transform:
+        translate3d(-25%, 0, 0);
+}
+
+.chord-track.no-transition,
+.chord-track.no-transition .carousel-card {
+    transition: none !important;
+}
+
+
+/* ========================================
+   CARDS
+   ======================================== */
+
+.carousel-card {
+    display: flex;
+
+    flex-direction: column;
+
+    align-items: center;
+    justify-content: center;
+
+    min-width: 0;
+
+    transform:
+        scale(0.82);
+
+    opacity: 0.45;
+
+    transition:
+        transform
+        520ms
+        cubic-bezier(0.22, 1, 0.36, 1),
+
+        opacity
+        520ms
+        cubic-bezier(0.22, 1, 0.36, 1),
+
+        filter
+        520ms
+        cubic-bezier(0.22, 1, 0.36, 1);
+
+    will-change:
+        transform,
+        opacity;
+}
+
+
+/* center card */
+
+.carousel-card.current-card {
+    transform:
+        scale(1);
+
+    opacity: 1;
+
+    filter:
+        drop-shadow(
+            0 20px 22px
+            rgba(0, 0, 0, 0.12)
+        );
+}
+
+
+/*
+ * While moving:
+ *
+ * card 2 becomes Previous
+ * card 3 becomes Current
+ * card 4 becomes Next
+ */
+
+.chord-track.rolling
+.carousel-card:nth-child(2) {
+    transform:
+        scale(0.82);
+
+    opacity: 0.45;
+
+    filter: none;
+}
+
+.chord-track.rolling
+.carousel-card:nth-child(3) {
+    transform:
+        scale(1);
+
+    opacity: 1;
+
+    filter:
+        drop-shadow(
+            0 20px 22px
+            rgba(0, 0, 0, 0.12)
+        );
+}
+
+.chord-track.rolling
+.carousel-card:nth-child(4) {
+    transform:
+        scale(0.82);
+
+    opacity: 0.45;
+}
+
+
+/* first card fades while leaving */
+
+.chord-track.rolling
+.carousel-card:nth-child(1) {
+    opacity: 0;
+}
+
+
+/* ========================================
+   CHORD IMAGES
+   ======================================== */
+
+.chord-image {
+    width:
+        min(24vw, 420px);
+
+    height:
+        min(34vh, 420px);
+
+    object-fit: contain;
+
+    display: block;
+}
+
+
+.chord-label {
+    margin-top: 8px;
+
+    font-family:
+        "Rakkas",
+        serif;
+
+    font-size:
+        clamp(22px, 2vw, 36px);
+}
+
+.hidden {
+    display: none !important;
+}
+
+@media (max-height: 800px) {
+
+    .app {
+        padding-top: 14px;
+        padding-bottom: 16px;
+    }
+
+    .divider {
+        margin: 10px 0;
+    }
+
+    .chord-display {
+        min-height: 300px;
+    }
+
+    .chord-image {
+        height: 30vh;
+    }
+
+    .chord-card.side .chord-image {
+        height: 24vh;
+    }
+
+    .empty-state {
+        min-height: 300px;
+    }
+}
+
+@media (max-width: 900px) {
+
+    .app-header h1 {
+        font-size: clamp(26px, 5vw, 40px);
+    }
+
+    .logo {
+        font-size: clamp(24px, 5vw, 38px);
+    }
+
+    .chord-display {
+        gap: 12px;
+    }
+
+    .timeline {
+        width: 40vw;
+    }
+}
