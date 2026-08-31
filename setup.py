@@ -427,19 +427,25 @@ def open_windows_terminals():
         'npm run tauri dev'
     )
 
-    subprocess.Popen([
-        powershell,
-        "-NoExit",
-        "-Command",
-        backend_command,
-    ])
+    subprocess.Popen(
+        [
+            powershell,
+            "-NoExit",
+            "-Command",
+            backend_command,
+        ],
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
 
-    subprocess.Popen([
-        powershell,
-        "-NoExit",
-        "-Command",
-        frontend_command,
-    ])
+    subprocess.Popen(
+        [
+            powershell,
+            "-NoExit",
+            "-Command",
+            frontend_command,
+        ],
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
 
 
 def linux_terminal_command(command):
