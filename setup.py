@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -36,7 +38,7 @@ IS_LINUX = SYSTEM == "Linux"
 
 def run(command, cwd=None, check=True):
     """
-    Run a command and display it first.
+    Run a command and print it first.
     """
 
     command = [str(x) for x in command]
@@ -53,7 +55,7 @@ def run(command, cwd=None, check=True):
 
 def require_command(name):
     """
-    Make sure an external command exists.
+    Make sure an external command exists in PATH.
     """
 
     path = shutil.which(name)
@@ -68,7 +70,7 @@ def require_command(name):
 
 def get_venv_python(environment):
     """
-    Return the Python executable inside a venv.
+    Return the Python executable inside a virtual environment.
     """
 
     if IS_WINDOWS:
@@ -79,7 +81,7 @@ def get_venv_python(environment):
 
 def create_venv(environment):
     """
-    Create a Python virtual environment if it doesn't exist.
+    Create a Python virtual environment if it doesn't already exist.
     """
 
     python = get_venv_python(environment)
@@ -116,7 +118,10 @@ def validate_environment():
     print(f"Python           : {sys.version.split()[0]}")
     print(f"Repository       : {ROOT}")
 
-    if not (sys.version_info.major == 3 and sys.version_info.minor == 12):
+    if not (
+        sys.version_info.major == 3
+        and sys.version_info.minor == 12
+    ):
         raise RuntimeError(
             "ChordSense setup currently requires Python 3.12.\n\n"
             "Windows:\n"
@@ -134,6 +139,10 @@ def validate_environment():
     require_command("git")
     require_command("npm")
 
+    # Tauri requires Rust.
+    require_command("cargo")
+    require_command("rustc")
+
     if not BACKEND.exists():
         raise RuntimeError(
             f"Backend directory does not exist: {BACKEND}"
@@ -146,7 +155,8 @@ def validate_environment():
 
     if not BACKEND_REQUIREMENTS.exists():
         raise RuntimeError(
-            f"Missing backend requirements file: {BACKEND_REQUIREMENTS}"
+            f"Missing backend requirements file: "
+            f"{BACKEND_REQUIREMENTS}"
         )
 
     if not PATCH.exists():
@@ -181,7 +191,8 @@ def setup_submodules():
 
     if not MODEL_REQUIREMENTS.exists():
         raise RuntimeError(
-            f"Model requirements file does not exist: {MODEL_REQUIREMENTS}"
+            f"Model requirements file does not exist: "
+            f"{MODEL_REQUIREMENTS}"
         )
 
 
@@ -303,20 +314,22 @@ def ignore_model_venv():
 
             file.write("venv/\n")
 
-        print("Added venv/ to the model submodule's local exclude list.")
+        print(
+            "Added venv/ to the model submodule's "
+            "local exclude list."
+        )
     else:
         print("Model venv is already locally ignored.")
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Model compatibility patch
+# Step 5: Apply model compatibility patch
 # ---------------------------------------------------------------------------
 
 def apply_model_patch():
     print()
     print("[5/7] Applying model compatibility patch...")
 
-    # Can the patch be applied?
     check = subprocess.run(
         [
             "git",
@@ -342,7 +355,7 @@ def apply_model_patch():
         print("Model compatibility patch applied.")
         return
 
-    # If it cannot be applied, check whether it has already been applied.
+    # If normal application fails, check if it is already applied.
     reverse_check = subprocess.run(
         [
             "git",
@@ -363,13 +376,13 @@ def apply_model_patch():
 
     raise RuntimeError(
         "The model compatibility patch does not apply cleanly.\n"
-        "The model submodule may be modified or checked out at an "
-        "unexpected commit."
+        "The model submodule may be modified or checked out "
+        "at an unexpected commit."
     )
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Frontend
+# Step 6: Frontend dependencies
 # ---------------------------------------------------------------------------
 
 def setup_frontend():
@@ -388,14 +401,23 @@ def setup_frontend():
 
 
 # ---------------------------------------------------------------------------
-# Step 7: Open ready-to-start terminals
+# Step 7A: Windows terminals
 # ---------------------------------------------------------------------------
 
 def open_windows_terminals():
     """
-    Open two PowerShell terminals.
+    Open two separate PowerShell consoles.
 
-    Each terminal waits for Enter before starting its process.
+    Backend:
+        - Opens in backend/
+        - Activates backend/.venv
+        - Waits for Enter
+        - Runs python app.py
+
+    Frontend:
+        - Opens in frontend-tauri/frontend-tauri/
+        - Waits for Enter
+        - Runs npm run tauri dev
     """
 
     powershell = (
@@ -408,22 +430,34 @@ def open_windows_terminals():
             "PowerShell could not be found."
         )
 
+    backend_activate = (
+        BACKEND_VENV
+        / "Scripts"
+        / "Activate.ps1"
+    )
+
     backend_command = (
         f'Set-Location -LiteralPath "{BACKEND}"; '
-        f'& "{BACKEND_VENV / "Scripts" / "Activate.ps1"}"; '
+        f'& "{backend_activate}"; '
         'Write-Host ""; '
-        'Write-Host "ChordSense Backend Ready" -ForegroundColor Green; '
+        'Write-Host '
+        '"ChordSense Backend Ready" '
+        '-ForegroundColor Green; '
         'Write-Host ""; '
-        'Read-Host "Press ENTER to start python app.py"; '
+        'Read-Host '
+        '"Press ENTER to start python app.py"; '
         'python app.py'
     )
 
     frontend_command = (
         f'Set-Location -LiteralPath "{FRONTEND}"; '
         'Write-Host ""; '
-        'Write-Host "ChordSense Frontend Ready" -ForegroundColor Green; '
+        'Write-Host '
+        '"ChordSense Frontend Ready" '
+        '-ForegroundColor Green; '
         'Write-Host ""; '
-        'Read-Host "Press ENTER to start npm run tauri dev"; '
+        'Read-Host '
+        '"Press ENTER to start npm run tauri dev"; '
         'npm run tauri dev'
     )
 
@@ -448,19 +482,49 @@ def open_windows_terminals():
     )
 
 
-def linux_terminal_command(command):
+# ---------------------------------------------------------------------------
+# Step 7B: Linux terminals
+# ---------------------------------------------------------------------------
+
+def find_linux_terminal():
     """
-    Open a graphical Linux terminal and run a bash command.
+    Find a supported Linux graphical terminal emulator.
     """
 
-    gnome_terminal = shutil.which("gnome-terminal")
-    konsole = shutil.which("konsole")
-    xfce_terminal = shutil.which("xfce4-terminal")
-    xterm = shutil.which("xterm")
+    terminals = [
+        "gnome-terminal",
+        "konsole",
+        "xfce4-terminal",
+        "mate-terminal",
+        "lxterminal",
+        "xterm",
+    ]
 
-    if gnome_terminal:
+    for name in terminals:
+        path = shutil.which(name)
+
+        if path:
+            return name, path
+
+    return None, None
+
+
+def spawn_linux_terminal(title, command):
+    """
+    Open one Linux terminal window and execute a bash command.
+    """
+
+    terminal_name, terminal = find_linux_terminal()
+
+    if terminal is None:
+        return False
+
+    # GNOME Terminal
+    if terminal_name == "gnome-terminal":
         subprocess.Popen([
-            gnome_terminal,
+            terminal,
+            "--title",
+            title,
             "--",
             "bash",
             "-lc",
@@ -468,9 +532,13 @@ def linux_terminal_command(command):
         ])
         return True
 
-    if konsole:
+    # KDE Konsole
+    if terminal_name == "konsole":
         subprocess.Popen([
-            konsole,
+            terminal,
+            "--new-tab",
+            "-p",
+            f"tabtitle={title}",
             "-e",
             "bash",
             "-lc",
@@ -478,17 +546,47 @@ def linux_terminal_command(command):
         ])
         return True
 
-    if xfce_terminal:
+    # XFCE Terminal
+    if terminal_name == "xfce4-terminal":
         subprocess.Popen([
-            xfce_terminal,
+            terminal,
+            "--title",
+            title,
             "--command",
-            f"bash -lc {shlex_quote(command)}",
+            f"bash -lc {shlex.quote(command)}",
         ])
         return True
 
-    if xterm:
+    # MATE Terminal
+    if terminal_name == "mate-terminal":
         subprocess.Popen([
-            xterm,
+            terminal,
+            "--title",
+            title,
+            "--",
+            "bash",
+            "-lc",
+            command,
+        ])
+        return True
+
+    # LXTerminal
+    if terminal_name == "lxterminal":
+        subprocess.Popen([
+            terminal,
+            "--title",
+            title,
+            "-e",
+            f"bash -lc {shlex.quote(command)}",
+        ])
+        return True
+
+    # xterm
+    if terminal_name == "xterm":
+        subprocess.Popen([
+            terminal,
+            "-T",
+            title,
             "-e",
             "bash",
             "-lc",
@@ -499,67 +597,108 @@ def linux_terminal_command(command):
     return False
 
 
-def shlex_quote(value):
-    """
-    Minimal shell quoting helper without requiring shell=True.
-    """
-
-    import shlex
-    return shlex.quote(value)
-
-
 def open_linux_terminals():
     """
-    Open two Linux terminal windows.
+    Open two separate Linux terminal windows.
 
-    Each waits for Enter before starting the backend/frontend.
+    Behavior mirrors Windows:
+        - One backend terminal
+        - One frontend terminal
+        - Each waits for Enter before starting
     """
 
+    if (
+        not os.environ.get("DISPLAY")
+        and not os.environ.get("WAYLAND_DISPLAY")
+    ):
+        print()
+        print(
+            "No graphical Linux session detected."
+        )
+        print_manual_start_commands()
+        return
+
     backend_command = (
-        f'cd {shlex_quote(str(BACKEND))}; '
+        f'cd {shlex.quote(str(BACKEND))}; '
         'source .venv/bin/activate; '
-        'echo; '
-        'echo "ChordSense Backend Ready"; '
-        'echo; '
-        'read -r -p "Press ENTER to start python app.py"; '
+        'printf "\\n"; '
+        'printf "\\033[32mChordSense Backend Ready\\033[0m\\n"; '
+        'printf "\\n"; '
+        'read -r -p '
+        '"Press ENTER to start python app.py"; '
         'python app.py; '
-        'echo; '
-        'echo "Backend exited. Press ENTER to close."; '
-        'read -r'
+        'printf "\\n"; '
+        'read -r -p '
+        '"Backend exited. Press ENTER to close."'
     )
 
     frontend_command = (
-        f'cd {shlex_quote(str(FRONTEND))}; '
-        'echo; '
-        'echo "ChordSense Frontend Ready"; '
-        'echo; '
-        'read -r -p "Press ENTER to start npm run tauri dev"; '
+        f'cd {shlex.quote(str(FRONTEND))}; '
+        'printf "\\n"; '
+        'printf "\\033[32mChordSense Frontend Ready\\033[0m\\n"; '
+        'printf "\\n"; '
+        'read -r -p '
+        '"Press ENTER to start npm run tauri dev"; '
         'npm run tauri dev; '
-        'echo; '
-        'echo "Frontend exited. Press ENTER to close."; '
-        'read -r'
+        'printf "\\n"; '
+        'read -r -p '
+        '"Frontend exited. Press ENTER to close."'
     )
 
-    first = linux_terminal_command(backend_command)
-    second = linux_terminal_command(frontend_command)
+    backend_opened = spawn_linux_terminal(
+        "ChordSense Backend",
+        backend_command,
+    )
 
-    if not first or not second:
+    frontend_opened = spawn_linux_terminal(
+        "ChordSense Frontend",
+        frontend_command,
+    )
+
+    if not backend_opened or not frontend_opened:
         print()
         print(
-            "No supported graphical Linux terminal was found."
+            "Could not find a supported Linux terminal emulator."
         )
+
+        print_manual_start_commands()
+
+
+# ---------------------------------------------------------------------------
+# Manual fallback
+# ---------------------------------------------------------------------------
+
+def print_manual_start_commands():
+    print()
+    print("Open two terminals manually.")
+    print()
+
+    if IS_WINDOWS:
+        print("Backend:")
+        print(r"  cd backend")
+        print(r"  .\.venv\Scripts\Activate.ps1")
+        print(r"  python app.py")
         print()
-        print("Open two terminals manually:")
-        print()
+
+        print("Frontend:")
+        print(r"  cd frontend-tauri\frontend-tauri")
+        print(r"  npm run tauri dev")
+
+    else:
         print("Backend:")
         print(f"  cd {BACKEND}")
         print("  source .venv/bin/activate")
         print("  python app.py")
         print()
+
         print("Frontend:")
         print(f"  cd {FRONTEND}")
         print("  npm run tauri dev")
 
+
+# ---------------------------------------------------------------------------
+# Open terminals
+# ---------------------------------------------------------------------------
 
 def open_ready_terminals():
     print()
@@ -601,12 +740,12 @@ def main():
     open_ready_terminals()
 
     print()
-    print("Two terminals should now be ready.")
+    print("Backend and frontend terminals are ready.")
     print()
-    print("Backend terminal:")
+    print("Backend:")
     print("  Press ENTER to run: python app.py")
     print()
-    print("Frontend terminal:")
+    print("Frontend:")
     print("  Press ENTER to run: npm run tauri dev")
     print()
 
@@ -632,5 +771,9 @@ if __name__ == "__main__":
 
     except Exception as exc:
         print()
-        print(f"Setup failed: {exc}", file=sys.stderr)
+        print(
+            f"Setup failed: {exc}",
+            file=sys.stderr,
+        )
+
         sys.exit(1)
