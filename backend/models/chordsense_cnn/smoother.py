@@ -1,52 +1,55 @@
-from scipy.stats import mode
+import librosa
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
-from .config import *
-import librosa
+from scipy.stats import mode
 
-def smooth_predictions(predictions, vote_window=VOTE_WINDOW):
-  half = vote_window // 2
-  padded_predictions = np.pad(predictions, half, mode="edge")
-  sliding_view = sliding_window_view(padded_predictions, vote_window)
-  smoothed_preds = mode(sliding_view, axis=1, keepdims=False).mode
-  return smoothed_preds
+from .audio_processing import DEFAULT_PREPROCESSING_CONFIG, PreprocessingConfig
+from .config import CHORD_CLASSES, POST_ONSET_LENGTH, POST_ONSET_OFFSET, VOTE_WINDOW
 
-def final_prediction(smoothed_preds, y):
-  noise_idx = CHORD_CLASSES.index("Noise")
-    
-  onsets = librosa.onset.onset_detect(y=y, sr=SAMPLE_RATE, hop_length=HOP_LENGTH, backtrack=True)
-  
-  final_pred = np.empty_like(smoothed_preds)
-  segments = []  # list of (start_frame, end_frame, label)
-  
-  current_chord = noise_idx
-  current_start = 0
-  
-  for onset_frame in onsets:
-    # read the post-onset window to find out what chord starts here
-    lo = onset_frame + POST_ONSESET_OFFSET
-    hi = min(lo + POST_ONSESET_LENGTH, len(smoothed_preds))
-    if lo >= len(smoothed_preds):
-      break  # onset too close to end to read a post-window
-    
-    post_onset_chord = mode(smoothed_preds[lo:hi], keepdims=False).mode
-    
-    if post_onset_chord != current_chord:
-      # commit a boundary at this onset
-      segments.append((current_start, onset_frame, current_chord))
-      current_start = onset_frame
-      current_chord = post_onset_chord
-    # else: same chord, this onset was just another strum — ignore
-  
-  # close out the final segment
-  segments.append((current_start, len(smoothed_preds), current_chord))
-  
-  # paint frame-level output from segments
-  for start, end, label in segments:
-    final_pred[start:end] = label
 
-  return {
-    "frame_labels": final_pred,
-    "segments": segments,
-    "onset_frames": onsets,
-  }
+def smooth_predictions(predictions: np.ndarray, vote_window: int = VOTE_WINDOW) -> np.ndarray:
+    half_window = vote_window // 2
+    padded = np.pad(predictions, half_window, mode="edge")
+    windows = sliding_window_view(padded, vote_window)
+    return mode(windows, axis=1, keepdims=False).mode
+
+
+def final_prediction(
+    smoothed_predictions: np.ndarray,
+    analysis_waveform: np.ndarray,
+    preprocessing: PreprocessingConfig = DEFAULT_PREPROCESSING_CONFIG,
+) -> dict[str, np.ndarray | list[tuple[int, int, int]]]:
+    noise_index = CHORD_CLASSES.index("Noise")
+    onsets = librosa.onset.onset_detect(
+        y=analysis_waveform,
+        sr=preprocessing.sample_rate,
+        hop_length=preprocessing.hop_length,
+        backtrack=True,
+    )
+
+    frame_labels = np.empty_like(smoothed_predictions)
+    segments = []
+    current_chord = noise_index
+    current_start = 0
+
+    for onset_frame in onsets:
+        start = onset_frame + POST_ONSET_OFFSET
+        end = min(start + POST_ONSET_LENGTH, len(smoothed_predictions))
+        if start >= len(smoothed_predictions):
+            break
+
+        post_onset_chord = int(mode(smoothed_predictions[start:end], keepdims=False).mode)
+        if post_onset_chord != current_chord:
+            segments.append((current_start, int(onset_frame), current_chord))
+            current_start = int(onset_frame)
+            current_chord = post_onset_chord
+
+    segments.append((current_start, len(smoothed_predictions), current_chord))
+    for start, end, label in segments:
+        frame_labels[start:end] = label
+
+    return {
+        "frame_labels": frame_labels,
+        "segments": segments,
+        "onset_frames": onsets,
+    }

@@ -1,140 +1,188 @@
-import os
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 _backend = Path(__file__).resolve().parent.parent.parent
 if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
 
-import librosa
 import numpy as np
 import torch
 
-from models.chordsense_cnn.audio_processing import extract_chroma_cqt, slice_into_windows
-from models.chordsense_cnn.config import *
+from models.chordsense_cnn.audio_processing import (
+    AudioBuffer,
+    DEFAULT_PREPROCESSING_CONFIG,
+    PreprocessedAudio,
+    PreprocessingConfig,
+    create_feature_windows,
+    load_audio_file,
+    preprocess_audio,
+)
+from models.chordsense_cnn.config import (
+    CHORD_CLASSES,
+    NUM_CLASSES,
+    RECORDING_OUTPUT_FILE,
+    VOTE_WINDOW,
+)
 from models.chordsense_cnn.model import build_model
 from models.chordsense_cnn.smoother import final_prediction, smooth_predictions
 
+
 class ChordRecognizer:
-  def __init__(self, checkpoint_path: str):
-    self.model = build_model(num_classes=NUM_CLASSES)
-    device = "cpu" # Default device value
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    checkpoint = torch.load(checkpoint_path, weights_only=True, map_location=device)
-    self.model.load_state_dict(checkpoint['model_state_dict'])
-    self.model.eval()
-    self.label_names = CHORD_CLASSES
+    def __init__(
+        self,
+        checkpoint_path: str | Path,
+        preprocessing: PreprocessingConfig = DEFAULT_PREPROCESSING_CONFIG,
+    ):
+        self.preprocessing = preprocessing
+        self.device = self._select_device()
+        self.model = build_model(num_classes=NUM_CLASSES).to(self.device)
+        checkpoint = torch.load(checkpoint_path, weights_only=True, map_location=self.device)
+        checkpoint_preprocessing = checkpoint.get("preprocessing")
+        if (
+            checkpoint_preprocessing is not None
+            and checkpoint_preprocessing != asdict(preprocessing)
+        ):
+            raise ValueError("Checkpoint preprocessing configuration does not match inference")
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.model.eval()
+        self.label_names = CHORD_CLASSES
 
-  def from_file(self, audio_path: str, output_path: str = RECORDING_OUTPUT_FILE):
-    if not audio_path.endswith(".wav") or not output_path.endswith(".lab"):
-      raise ValueError("Audio path must be a .wav file and output path must be a .lab file")
-    if not os.path.exists(audio_path):
-      raise FileNotFoundError(f"Audio file not found: {audio_path}")
+    @staticmethod
+    def _select_device() -> str:
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
 
-    chroma_cqt, y_harmonics = extract_chroma_cqt(audio_path)
+    def from_file(
+        self,
+        audio_path: str | Path,
+        output_path: str | Path = RECORDING_OUTPUT_FILE,
+    ) -> bool:
+        audio_path = Path(audio_path)
+        output_path = Path(output_path)
+        if audio_path.suffix.lower() != ".wav" or output_path.suffix.lower() != ".lab":
+            raise ValueError("Audio path must be a .wav file and output path must be a .lab file")
+        if not audio_path.exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        return self.from_audio(load_audio_file(audio_path), output_path)
 
-    if not self.from_chroma(y_harmonics, chroma_cqt, output_path):
-      return False
-    return True
+    def from_audio(
+        self,
+        audio: AudioBuffer,
+        output_path: str | Path = RECORDING_OUTPUT_FILE,
+    ) -> bool:
+        return self.from_preprocessed(preprocess_audio(audio, self.preprocessing), output_path)
 
-  def from_chroma(self, y_harmonics: np.ndarray, chroma_cqt: np.ndarray, output_path: str = RECORDING_OUTPUT_FILE):
-    windows = slice_into_windows(chroma_cqt)
-    features = torch.tensor(np.array(windows), dtype=torch.float32).unsqueeze(1)
-    with torch.no_grad():
-      outputs = self.model(features)
-      preds = torch.argmax(outputs, dim=1)
-    smoothed = smooth_predictions(preds, vote_window=VOTE_WINDOW)
-    model_predictions = final_prediction(smoothed, y_harmonics)
-    if not self.generate_lab_file(model_predictions, output_path):
-      return False
-    return True
+    def from_preprocessed(
+        self,
+        processed: PreprocessedAudio,
+        output_path: str | Path = RECORDING_OUTPUT_FILE,
+    ) -> bool:
+        return self.from_chroma(
+            processed.analysis_waveform,
+            processed.chroma,
+            output_path,
+        )
 
-  def generate_lab_file(self, model_predictions: dict, output_path: str = RECORDING_OUTPUT_FILE, min_duration: float = 0.4):
-    """
-    Write segments to a .lab file in the format: start\tend\tchord_label (seconds).
+    def from_chroma(
+        self,
+        analysis_waveform: np.ndarray,
+        chroma: np.ndarray,
+        output_path: str | Path = RECORDING_OUTPUT_FILE,
+    ) -> bool:
+        windows = create_feature_windows(chroma, self.preprocessing).values
+        features = torch.from_numpy(windows).unsqueeze(1).to(self.device)
+        with torch.no_grad():
+            predictions = self.model(features).argmax(dim=1).cpu().numpy()
+        smoothed = smooth_predictions(predictions, vote_window=VOTE_WINDOW)
+        model_predictions = final_prediction(
+            smoothed,
+            analysis_waveform,
+            self.preprocessing,
+        )
+        return self.generate_lab_file(model_predictions, output_path)
 
-    - Converts frame indices to seconds via HOP_LENGTH / SAMPLE_RATE.
-    - Noise is only allowed at the very start or very end of the track;
-      interior noise segments are absorbed into the previous chord.
-    - Segments shorter than `min_duration` seconds are merged into the
-      previous segment. Leading/trailing noise is exempt.
-    """
+    def generate_lab_file(
+        self,
+        model_predictions: dict,
+        output_path: str | Path = RECORDING_OUTPUT_FILE,
+        min_duration: float = 0.4,
+    ) -> bool:
+        segments = model_predictions["segments"]
+        if not segments:
+            return False
 
-    segments = model_predictions["segments"]
-    if not segments:
-      return False
+        noise_index = CHORD_CLASSES.index("Noise")
+        frame_seconds = self.preprocessing.hop_length / self.preprocessing.sample_rate
+        normalized = [
+            [start * frame_seconds, end * frame_seconds, label]
+            for start, end, label in segments
+        ]
 
-    noise_idx = CHORD_CLASSES.index("Noise")
-    frame_to_sec = HOP_LENGTH / SAMPLE_RATE
-
-    segs = [[s * frame_to_sec, e * frame_to_sec, lbl] for s, e, lbl in segments]
-
-    # Step 1: collapse interior noise — hold previous chord through it
-    first_non_noise = next((i for i, s in enumerate(segs) if s[2] != noise_idx), None)
-    last_non_noise = next((i for i in range(len(segs) - 1, -1, -1)
-                           if segs[i][2] != noise_idx), None)
-
-    if first_non_noise is None:
-      segs = [[segs[0][0], segs[-1][1], noise_idx]]
-    else:
-      for i in range(first_non_noise + 1, last_non_noise):
-        if segs[i][2] == noise_idx:
-          segs[i][2] = segs[i - 1][2]
-
-    def merge_adjacent(xs):
-      out = [xs[0]]
-      for seg in xs[1:]:
-        if seg[2] == out[-1][2]:
-          out[-1][1] = seg[1]
+        first_chord = next(
+            (i for i, segment in enumerate(normalized) if segment[2] != noise_index),
+            None,
+        )
+        last_chord = next(
+            (i for i in range(len(normalized) - 1, -1, -1) if normalized[i][2] != noise_index),
+            None,
+        )
+        if first_chord is None:
+            normalized = [[normalized[0][0], normalized[-1][1], noise_index]]
         else:
-          out.append(seg)
-      return out
+            for i in range(first_chord + 1, last_chord):
+                if normalized[i][2] == noise_index:
+                    normalized[i][2] = normalized[i - 1][2]
 
-    segs = merge_adjacent(segs)
+        normalized = self._merge_adjacent(normalized)
+        changed = True
+        while changed and len(normalized) > 1:
+            changed = False
+            for i, segment in enumerate(normalized):
+                edge_noise = segment[2] == noise_index and (i == 0 or i == len(normalized) - 1)
+                if edge_noise or segment[1] - segment[0] >= min_duration:
+                    continue
+                if i > 0:
+                    normalized[i - 1][1] = segment[1]
+                else:
+                    normalized[i + 1][0] = segment[0]
+                normalized.pop(i)
+                normalized = self._merge_adjacent(normalized)
+                changed = True
+                break
 
-    # Step 2: drop too-short segments, keeping edge noise
-    def is_edge_noise(idx, xs):
-      return xs[idx][2] == noise_idx and (idx == 0 or idx == len(xs) - 1)
+        try:
+            with Path(output_path).open("w", encoding="utf-8") as output:
+                for start, end, label in normalized:
+                    name = "N" if label == noise_index else self.label_names[label]
+                    output.write(f"{start}\t{end}\t{name}\n")
+        except OSError:
+            return False
+        return True
 
-    changed = True
-    while changed and len(segs) > 1:
-      changed = False
-      for i in range(len(segs)):
-        if is_edge_noise(i, segs):
-          continue
-        if (segs[i][1] - segs[i][0]) < min_duration:
-          if i > 0:
-            segs[i - 1][1] = segs[i][1]
-            segs.pop(i)
-          else:
-            segs[i + 1][0] = segs[i][0]
-            segs.pop(i)
-          changed = True
-          break
-      segs = merge_adjacent(segs)
+    @staticmethod
+    def _merge_adjacent(segments: list[list]) -> list[list]:
+        merged = [segments[0]]
+        for segment in segments[1:]:
+            if segment[2] == merged[-1][2]:
+                merged[-1][1] = segment[1]
+            else:
+                merged.append(segment)
+        return merged
 
-    try:
-      with open(output_path, "w", encoding="utf-8") as f:
-        for start, end, lbl in segs:
-          name = "N" if lbl == noise_idx else self.label_names[lbl]
-          f.write(f"{start}\t{end}\t{name}\n")
-      return True
-    except OSError:
-      return False
 
-def main():
-  args = sys.argv[1:]
-  if len(args) != 2:
-    print("Usage: python chord_recognition.py <audio_path> <output_path>")
-    return 1
-  audio_path = args[0]
-  output_path = args[1]
-  chord_recognizer = ChordRecognizer(checkpoint_path="checkpoints/latest_chord_cnn.pth")
-  chord_recognizer.from_file(audio_path, output_path)
-  return 0
+def main() -> int:
+    args = sys.argv[1:]
+    if len(args) != 2:
+        print("Usage: python chord_recognition.py <audio_path> <output_path>")
+        return 1
+    recognizer = ChordRecognizer("checkpoints/latest_chord_cnn.pth")
+    recognizer.from_file(args[0], args[1])
+    return 0
+
 
 if __name__ == "__main__":
-  main()
+    raise SystemExit(main())
