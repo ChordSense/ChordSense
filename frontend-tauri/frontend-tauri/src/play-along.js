@@ -700,7 +700,7 @@ async function togglePlayback() {
     }
 }
 
-function stopPlayback() {
+export function stopPlayback() {
     audio.pause();
     audio.currentTime = 0;
 

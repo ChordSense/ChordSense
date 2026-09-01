@@ -44,19 +44,53 @@ body {
 
 /* HEADER */
 
+#mode-title {
+    transition:
+        opacity 180ms ease,
+        transform 180ms ease;
+}
+
+#mode-title.header-leaving {
+    opacity: 0;
+    transform: translateY(-4px);
+}
+
+#mode-title.header-entering {
+    opacity: 0;
+    transform: translateY(4px);
+}
+
+.mode-tab {
+    transition:
+        background 160ms ease,
+        color 160ms ease,
+        transform 120ms ease,
+        opacity 140ms ease;
+}
+
+.mode-tab.active {
+    transform: scale(1.02);
+}
+
 .app-header {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
 
     align-items: center;
-    justify-content: space-between;
 }
 
 .app-header h1 {
+    justify-self: start;
+
     font-size: clamp(30px, 3vw, 56px);
 }
 
-.logo {
+.mode-switcher {
+    justify-self: center;
+}
 
+.logo {
+    justify-self: end;
     border-radius: 28px;
 
     background: #000;
@@ -75,8 +109,7 @@ body {
 
     margin: clamp(12px, 2vh, 28px) 0;
 
-    background:
-        rgba(0, 0, 0, 0.55);
+    background: #111;
 }
 
 /* TOOLBAR */
@@ -504,6 +537,25 @@ body {
 
     font-size:
         clamp(22px, 2vw, 36px);
+}
+
+.mode-view {
+    opacity: 1;
+    transform: translateY(0);
+
+    transition:
+        opacity 180ms ease,
+        transform 180ms ease;
+}
+
+.mode-view.mode-leaving {
+    opacity: 0;
+    transform: translateY(8px);
+}
+
+.mode-view.mode-entering {
+    opacity: 0;
+    transform: translateY(-8px);
 }
 
 .hidden {

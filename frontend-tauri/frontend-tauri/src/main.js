@@ -1,5 +1,6 @@
 import {
-    loadRecordedAnalysis
+    loadRecordedAnalysis,
+    stopPlayback
 } from "./play-along.js";
 
 import {
@@ -25,34 +26,106 @@ const modeTitle =
 
 let currentMode = "play";
 
+let isModeTransitioning = false;
 
-function showMode(mode) {
-
-    currentMode = mode;
-
-    if (mode === "play") {
-
-        playMode.classList.remove("hidden");
-        recordMode.classList.add("hidden");
-
-        playModeButton.classList.add("active");
-        recordModeButton.classList.remove("active");
-
-        modeTitle.textContent =
-            "Mode: Play Along";
-
-    } else {
-
-        playMode.classList.add("hidden");
-        recordMode.classList.remove("hidden");
-
-        playModeButton.classList.remove("active");
-        recordModeButton.classList.add("active");
-
-        modeTitle.textContent =
-            "Mode: Record";
-    }
+function wait(milliseconds) {
+    return new Promise(
+        resolve =>
+            setTimeout(
+                resolve,
+                milliseconds
+            )
+    );
 }
+
+async function updateHeader(mode) {
+
+
+    modeTitle.classList.add(
+        "header-leaving"
+    );
+    await wait(180);
+
+    modeTitle.textContent =
+        mode === "play"
+            ? "Mode: Play Along"
+            : "Mode: Record";
+
+    playModeButton.classList.toggle(
+        "active",
+        mode === "play"
+    );
+
+    recordModeButton.classList.toggle(
+        "active",
+        mode === "record"
+    );
+
+    modeTitle.classList.remove(
+        "header-leaving"
+    );
+
+    modeTitle.classList.add(
+        "header-entering"
+    );
+
+    void modeTitle.offsetHeight;
+
+    modeTitle.classList.remove(
+        "header-entering"
+    );
+
+    await wait(180);
+}
+
+async function showMode(mode) {
+
+    if (
+        mode === currentMode ||
+        isModeTransitioning
+    ) {
+        return;
+    }
+
+    isModeTransitioning = true;
+
+    const outgoingView =
+        currentMode === "play"
+            ? playMode
+            : recordMode;
+
+    const incomingView =
+        mode === "play"
+            ? playMode
+            : recordMode;
+    // stop playback when enterin record mode
+    if (mode === "record") {
+        stopPlayback();
+    }
+    // fade out
+    const headerTransition = updateHeader(mode);
+    outgoingView.classList.add("mode-leaving");
+    await wait(180);
+    // hide the old mode
+    outgoingView.classList.add("hidden");
+    outgoingView.classList.remove("mode-leaving");
+
+    incomingView.classList.add("mode-entering");
+
+    incomingView.classList.remove("hidden");
+
+    void incomingView.offsetHeight;
+    // animate the incoming view
+    incomingView.classList.remove("mode-entering");
+    // update mode controls
+    currentMode = mode;
+    await Promise.all([
+        headerTransition,
+        wait(180)
+    ]);
+    isModeTransitioning = false;
+}
+
 
 
 playModeButton.addEventListener(
@@ -84,9 +157,7 @@ window.addEventListener(
             return;
         }
 
-        if (
-            event.key.toLowerCase() === "m"
-        ) {
+        if (event.key.toLowerCase() === "m") {
             showMode(
                 currentMode === "play"
                     ? "record"
@@ -124,6 +195,3 @@ initRecordMode({
             locked;
     }
 });
-
-
-showMode("play");
