@@ -9,7 +9,8 @@ from werkzeug.utils import secure_filename
 from guitar_input import Worker
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_REPO = BASE_DIR / "model_repo"
+# Original: MODEL_REPO = BASE_DIR / "model_repo"
+MODEL_REPO = BASE_DIR / "models" / "chord-cnn-lstm-model"
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
 OUTPUTS_DIR = RUNTIME_DIR / "outputs"
@@ -20,7 +21,8 @@ for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
-chord_recognizer = ChordRecognizer(PRETRAINED_MODEL_REPO / "model.pth")
+# Original: chord_recognizer = ChordRecognizer(PRETRAINED_MODEL_REPO / "model.pth")
+chord_recognizer = None
 worker = Worker()
 
 def parse_lab_file(lab_path: Path):
@@ -200,3 +202,4 @@ def end_recording():
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5051, debug=False)
+

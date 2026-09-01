@@ -16,7 +16,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![backend_health, analyze_audio, begin_recording,
-        end_recording])
+        end_recording, load_audio_file])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -244,6 +244,19 @@ async fn begin_recording()
 
 
     Ok(payload)
+}
+
+#[tauri::command]
+async fn load_audio_file(path: String) -> Result<Vec<u8>, String> {
+    let audio_path = Path::new(&path);
+
+    if !audio_path.exists() {
+        return Err(format!("Audio file does not exist: {}", path));
+    }
+
+    tokio::fs::read(audio_path)
+        .await
+        .map_err(|e| format!("Failed to read audio file: {e}"))
 }
 
 #[tauri::command]

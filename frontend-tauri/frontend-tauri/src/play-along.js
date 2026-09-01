@@ -1,4 +1,4 @@
-const { invoke, convertFileSrc } = window.__TAURI__.core;
+const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
 
 console.log("ChordSense JS loaded");
@@ -510,6 +510,24 @@ function prettyChord(raw) {
         .replace(":min", "m");
 }
 
+function getAudioMimeType(path) {
+    const lower = path.toLowerCase();
+
+    if (lower.endsWith(".mp3")) {
+        return "audio/mpeg";
+    }
+
+    if (lower.endsWith(".wav")) {
+        return "audio/wav";
+    }
+
+    if (lower.endsWith(".ogg")) {
+        return "audio/ogg";
+    }
+
+    return "application/octet-stream";
+}
+
 async function loadAudio() {
     const selected = await open({
         multiple: false,
@@ -556,8 +574,21 @@ async function loadAudio() {
 
     audio.pause();
 
-    audio.src =
-        convertFileSrc(selected);
+    const audioBytes = await invoke(
+        "load_audio_file",
+        {
+            path: selected
+        }
+    );
+
+    const audioBlob = new Blob(
+        [new Uint8Array(audioBytes)],
+        {
+            type: getAudioMimeType(selected)
+        }
+    );
+
+    audio.src = URL.createObjectURL(audioBlob);
 
     audio.load();
 }
@@ -633,13 +664,37 @@ async function analyzeAudio() {
     }
 }
 
+// async function togglePlayback() {
+//     if (!state.audioPath) {
+//         return;
+//     }
+
+//     if (audio.paused) {
+//         await audio.play();
+//     } else {
+//         audio.pause();
+//     }
+// }
+
 async function togglePlayback() {
     if (!state.audioPath) {
+        console.error("No audio path");
         return;
     }
 
+    console.log("Audio src:", audio.src);
+    console.log("readyState:", audio.readyState);
+    console.log("networkState:", audio.networkState);
+    console.log("duration:", audio.duration);
+    console.log("audio error:", audio.error);
+
     if (audio.paused) {
-        await audio.play();
+        try {
+            await audio.play();
+            console.log("Playback started");
+        } catch (error) {
+            console.error("PLAYBACK FAILED:", error);
+        }
     } else {
         audio.pause();
     }
