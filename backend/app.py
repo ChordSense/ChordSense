@@ -4,13 +4,15 @@ import tempfile
 from pathlib import Path
 
 from flask import Flask, jsonify, request
-#from models.chordsense_cnn.chord_recognition import ChordRecognizer
 from werkzeug.utils import secure_filename
 from guitar_input import Worker
 
 BASE_DIR = Path(__file__).resolve().parent
 # Original: MODEL_REPO = BASE_DIR / "model_repo"
 MODEL_REPO = BASE_DIR / "models" / "chord-cnn-lstm-model"
+CUSTOM_MODEL_CHECKPOINT = (
+    BASE_DIR / "models" / "chordsense_cnn" / "checkpoints" / "latest_chord_cnn.pth"
+)
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
 OUTPUTS_DIR = RUNTIME_DIR / "outputs"
@@ -21,9 +23,17 @@ for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
-# Original: chord_recognizer = ChordRecognizer(PRETRAINED_MODEL_REPO / "model.pth")
 chord_recognizer = None
 worker = Worker()
+
+
+def get_chord_recognizer():
+    global chord_recognizer
+    if chord_recognizer is None:
+        from models.chordsense_cnn.chord_recognition import ChordRecognizer
+
+        chord_recognizer = ChordRecognizer(CUSTOM_MODEL_CHECKPOINT)
+    return chord_recognizer
 
 def parse_lab_file(lab_path: Path):
     results = []
@@ -165,18 +175,16 @@ def begin_recording():
 @app.post("/end_recording")
 def end_recording():
     print("=== /end_recording request received ===", flush=True)
-    # Change the line below
     output_lab_path = OUTPUTS_DIR / "temp.lab"
 
     try:
         print("Ending recording...", flush=True)
-        # Stop recording audio, async (not implemented rn)
-        chroma_cqt, y_harmonics = worker.stop()
+        audio = worker.stop()
 
-        if chroma is None:
+        if audio is None:
             return jsonify({"success": False, "error": "No frames captured"}), 400
-        chord_recognizer.from_chroma(y_harmonics, chroma_cqt)
-        
+        get_chord_recognizer().from_audio(audio, output_lab_path)
+
         chords = parse_lab_file(output_lab_path)
         duration = chords[-1]["end"] if chords else 0.0
 
@@ -202,4 +210,3 @@ def end_recording():
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5051, debug=False)
-

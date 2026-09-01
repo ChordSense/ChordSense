@@ -1,124 +1,114 @@
+import struct
+import threading
+import time
+
+import numpy as np
 import serial
 import serial.tools.list_ports
-import numpy as np
-import librosa
-import struct
-import time
-import threading
 
-SAMPLE_RATE  = 22050
-FFT_SIZE     = 2048
-BAUD         = 115200
-MARKER       = 0xDEADBEEF
-MARKER_BYTES = struct.pack('<I', MARKER)
+from models.chordsense_cnn.audio_processing import (
+    AudioBuffer,
+    DEFAULT_PREPROCESSING_CONFIG,
+)
 
-FMIN         = librosa.note_to_hz('E2')
-N_BINS       = 12
-BINS_PER_OCT = 12
+SAMPLE_RATE = DEFAULT_PREPROCESSING_CONFIG.sample_rate
+FRAME_SIZE = 2048
+BAUD_RATE = 115200
+MARKER_BYTES = struct.pack("<I", 0xDEADBEEF)
 
-def find_esp_port():
+
+def find_esp_port() -> str:
     ports = serial.tools.list_ports.comports()
-    for p in ports:
-        if any(x in p.description for x in ['USB Serial']):
-            print(f"Found ESP on {p.device}: {p.description}")
-            return p.device
-    print("Could not auto-detect ESP port. Available ports:")
-    for i, p in enumerate(ports):
-        print(f"  [{i}] {p.device} — {p.description}")
-    index = int(input("Enter port number: "))
-    return ports[index].device
+    for port in ports:
+        if "USB Serial" in port.description:
+            print(f"Found ESP on {port.device}: {port.description}")
+            return port.device
 
-def find_marker(ser):
-    buf = b''
+    print("Could not auto-detect ESP port. Available ports:")
+    for index, port in enumerate(ports):
+        print(f"  [{index}] {port.device} — {port.description}")
+    return ports[int(input("Enter port number: "))].device
+
+
+def find_marker(connection: serial.Serial) -> bool:
+    buffer = b""
     while True:
-        byte = ser.read(1)
+        byte = connection.read(1)
         if not byte:
             return False
-        buf += byte
-        if len(buf) > 4:
-            buf = buf[-4:]
-        if buf == MARKER_BYTES:
+        buffer = (buffer + byte)[-4:]
+        if buffer == MARKER_BYTES:
             return True
 
-def read_frame(ser):
-    if not find_marker(ser):
+
+def read_frame(connection: serial.Serial) -> np.ndarray | None:
+    if not find_marker(connection):
         return None
-    raw = ser.read(FFT_SIZE * 2)
-    if len(raw) != FFT_SIZE * 2:
+    raw = connection.read(FRAME_SIZE * 2)
+    if len(raw) != FRAME_SIZE * 2:
         return None
     samples = np.frombuffer(raw, dtype=np.uint16).astype(np.float32)
-    samples = (samples - 2048.0) / 2048.0
-    return samples
+    return (samples - 2048.0) / 2048.0
 
 
 class Worker:
-    def __init__(self, port=None):
+    def __init__(self, port: str | None = None):
         self._stop_event = threading.Event()
-        self._thread = None
-        self._samples = []
-        self._frame_count = 0
+        self._thread: threading.Thread | None = None
+        self._samples: list[np.ndarray] = []
         self._port = port
-        self._ser = None
+        self._connection: serial.Serial | None = None
 
-    def _run(self):
-        self._ser.reset_input_buffer()
+    def _run(self) -> None:
+        self._connection.reset_input_buffer()
         while not self._stop_event.is_set():
-            frame = read_frame(self._ser)
-            if frame is None:
-                continue
-            self._frame_count += 1
-            self._samples.append(frame)
+            frame = read_frame(self._connection)
+            if frame is not None:
+                self._samples.append(frame)
 
-    def start(self):
-        """Open serial and start recording. Returns immediately."""
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("Recording is already active")
         if self._port is None:
             self._port = find_esp_port()
 
-        self._ser = serial.Serial(self._port, BAUD, timeout=2)
+        self._connection = serial.Serial(self._port, BAUD_RATE, timeout=2)
         time.sleep(1.5)
-
         self._stop_event.clear()
         self._samples = []
-        self._frame_count = 0
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         print(f"Recording started on {self._port}...")
 
-    def stop(self):
-        """Stop recording, close serial, return (chroma_cqt, harmonic)."""
+    def stop(self) -> AudioBuffer | None:
+        if self._thread is None:
+            return None
+
         self._stop_event.set()
         self._thread.join()
+        self._thread = None
 
-        if self._ser:
-            self._ser.close()
-            self._ser = None
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
 
-        if self._frame_count == 0:
+        if not self._samples:
             print("No frames captured.")
-            return None, None
+            return None
 
-        signal = np.concatenate(self._samples)
-        print(f"Recorded {self._frame_count} frames, {len(signal)} samples ({len(signal)/SAMPLE_RATE:.2f}s)")
-
-        harmonic = librosa.effects.harmonic(signal)
-
-        chroma = np.abs(librosa.feature.chroma_cqt(
-            y=signal,
-            sr=SAMPLE_RATE,
-            hop_length=512,
-            fmin=FMIN,
-            n_chroma=N_BINS,
-            bins_per_octave=BINS_PER_OCT
-        ))
-
-        return chroma, harmonic
+        samples = np.concatenate(self._samples)
+        audio = AudioBuffer(samples, SAMPLE_RATE)
+        print(
+            f"Recorded {len(self._samples)} frames, {len(samples)} samples "
+            f"({audio.duration_seconds:.2f}s)"
+        )
+        return audio
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     worker = Worker()
     worker.start()
     input("Press Enter to stop recording...\n")
-    chroma, harmonic = worker.stop()
-    if chroma is not None:
-        print(f"Chroma shape: {chroma.shape}")
-        print(f"Harmonic signal length: {len(harmonic)}")
+    recording = worker.stop()
+    if recording is not None:
+        print(f"Audio duration: {recording.duration_seconds:.2f}s")

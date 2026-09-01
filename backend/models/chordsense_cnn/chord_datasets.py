@@ -1,7 +1,15 @@
 from torch.utils.data import Dataset
 import torch
 import numpy as np
-from .audio_processing import extract_chroma_cqt, slice_into_windows
+from .audio_processing import (
+    DEFAULT_PREPROCESSING_CONFIG,
+    PreprocessedAudio,
+    PreprocessingConfig,
+    create_feature_windows,
+    load_audio_file,
+    load_dataset_audio,
+    preprocess_audio,
+)
 import os
 from collections import defaultdict
 import random
@@ -29,19 +37,23 @@ def get_guitarchords_files(root_folder):
 
 
 class ChordDataset(Dataset):
-    def __init__(self, samples, noise_label, rms_threshold=0.01):
+    def __init__(
+        self,
+        samples: list[tuple[PreprocessedAudio, int]],
+        noise_label: int,
+        preprocessing: PreprocessingConfig = DEFAULT_PREPROCESSING_CONFIG,
+        rms_threshold: float = 0.01,
+    ):
         all_windows = []
         all_labels = []
 
-        for chroma, waveform, label in samples:
-            windows = slice_into_windows(chroma)
-
-            hop_length = 512
-            context_frames = 15
-            context_samples = context_frames * hop_length
+        context_samples = preprocessing.context_frames * preprocessing.hop_length
+        for processed, label in samples:
+            windows = create_feature_windows(processed.chroma, preprocessing).values
+            waveform = processed.analysis_waveform
 
             for i, window in enumerate(windows):
-                start = i * hop_length
+                start = i * preprocessing.hop_length
                 end = start + context_samples
                 segment = waveform[start:end]
 
@@ -63,15 +75,20 @@ class ChordDataset(Dataset):
         return self.features[idx], self.labels[idx]
 
 
-def _load_hf_split(ds, split):
+def _load_hf_split(ds, split, preprocessing):
     samples = []
     for sample in ds[split]:
-        chroma, waveform = extract_chroma_cqt(sample)
-        samples.append((chroma, waveform, sample["label"]))
+        processed = preprocess_audio(load_dataset_audio(sample), preprocessing)
+        samples.append((processed, sample["label"]))
     return samples
 
 
-def _load_and_split_guitarchords(label_to_idx, train_ratio=0.9, seed=SEED):
+def _load_and_split_guitarchords(
+    label_to_idx,
+    preprocessing,
+    train_ratio=0.9,
+    seed=SEED,
+):
     """Decode GuitarChordsV3 once and split per-class so every chord appears in both sets."""
     rng = random.Random(seed)
 
@@ -80,12 +97,12 @@ def _load_and_split_guitarchords(label_to_idx, train_ratio=0.9, seed=SEED):
         if label not in label_to_idx:
             print("Label not in class list:", label)
             continue
-        chroma, waveform = extract_chroma_cqt(filepath)
-        gc_samples.append((chroma, waveform, label_to_idx[label]))
+        processed = preprocess_audio(load_audio_file(filepath), preprocessing)
+        gc_samples.append((processed, label_to_idx[label]))
 
     by_class = defaultdict(list)
-    for s in gc_samples:
-        by_class[s[2]].append(s)
+    for sample in gc_samples:
+        by_class[sample[1]].append(sample)
 
     gc_train, gc_test = [], []
     for items in by_class.values():
@@ -98,7 +115,9 @@ def _load_and_split_guitarchords(label_to_idx, train_ratio=0.9, seed=SEED):
     return gc_train, gc_test
 
 
-def build_datasets():
+def build_datasets(
+    preprocessing: PreprocessingConfig = DEFAULT_PREPROCESSING_CONFIG,
+):
     """Build train and test ChordDatasets from HF + GuitarChordsV3.
 
     Returns:
@@ -109,11 +128,19 @@ def build_datasets():
     label_to_idx = {name: i for i, name in enumerate(chord_classes)}
     noise_label = label_to_idx["Noise"]
 
-    hf_train = _load_hf_split(ds, "train")
-    hf_test = _load_hf_split(ds, "test")
-    gc_train, gc_test = _load_and_split_guitarchords(label_to_idx)
+    hf_train = _load_hf_split(ds, "train", preprocessing)
+    hf_test = _load_hf_split(ds, "test", preprocessing)
+    gc_train, gc_test = _load_and_split_guitarchords(label_to_idx, preprocessing)
 
-    train_dataset = ChordDataset(hf_train + gc_train, noise_label=noise_label)
-    test_dataset = ChordDataset(hf_test + gc_test, noise_label=noise_label)
+    train_dataset = ChordDataset(
+        hf_train + gc_train,
+        noise_label=noise_label,
+        preprocessing=preprocessing,
+    )
+    test_dataset = ChordDataset(
+        hf_test + gc_test,
+        noise_label=noise_label,
+        preprocessing=preprocessing,
+    )
 
     return train_dataset, test_dataset, chord_classes
