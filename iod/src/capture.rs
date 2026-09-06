@@ -76,7 +76,7 @@ impl AdcSampler {
 
         let thread_mode = Arc::clone(&mode);
         let thread_running = Arc::clone(&running);
-        /// try to get real time scheduling priority in the thread
+        // try to get real-time scheduling priority in the thread
         thread::spawn(move || {
             try_raise_realtime_priority();
             sampling_loop(spi, thread_mode, thread_running);
@@ -188,74 +188,162 @@ impl AdcSampler {
     }
 }
 
-/// sample one spi conversion at 22050 Hz
+/// ADC conversions read per loop iteration before draining to the sink. This
+/// only bounds how often the loop takes the mode lock and re-times itself — the
+/// reads themselves are back-to-back either way. Kept small so a stalled read
+/// is noticed promptly.
+const READ_CHUNK: usize = 16;
+
+/// Free-running ADC reader.
+///
+/// Pulls conversions from the MCP3201 continuously and as fast as spidev allows
+/// (no artificial per-sample pacing — this thread keeps one core busy for the
+/// life of the daemon, which is the intended "always sampling" design), stamps
+/// each chunk against a fixed start instant, and resamples that irregular
+/// native stream onto an even `SAMPLE_RATE_HZ` grid locked to wall-clock time.
+///
+/// As long as the native rate stays above `SAMPLE_RATE_HZ`, scheduler jitter or
+/// a briefly stalled read turns into a short stretch of interpolated output
+/// rather than a gap or a pitch shift, and the long-run output rate stays
+/// exactly `SAMPLE_RATE_HZ` (so `samples_written / SAMPLE_RATE_HZ` is an
+/// accurate capture duration).
+///
+/// Note: on the Pi 5 / RP1, per-conversion `cs_change` in a batched
+/// `SPI_IOC_MESSAGE` costs more than it saves — one `read_raw12` syscall per
+/// conversion measured faster (~45 kS/s peak vs ~23 kS/s batched). If that
+/// headroom over `SAMPLE_RATE_HZ` proves too thin under load, the fix is the
+/// kernel `mcp320x` IIO driver with an hrtimer trigger (hardware-paced, DMA),
+/// not more userspace SPI tricks.
 fn sampling_loop(spi: Mcp3201, mode: Arc<Mutex<Mode>>, running: Arc<AtomicBool>) {
-    let period = Duration::from_secs_f64(1.0 / SAMPLE_RATE_HZ as f64);
+    let out_period = 1.0 / SAMPLE_RATE_HZ as f64;
     let start = Instant::now();
-    let mut n: u64 = 0;
+
+    let mut raw: Vec<u16> = Vec::with_capacity(READ_CHUNK);
+    let mut out: Vec<i16> = Vec::with_capacity(READ_CHUNK * 4);
+
+    // wall-clock time and value of the last native sample of the previous
+    // chunk, so interpolation stays continuous across chunk boundaries
+    let mut prev_t = 0.0f64;
+    let mut prev_val = 0.0f64;
+    let mut primed = false;
+    // grid index of the next output sample to emit
+    let mut out_index: u64 = 0;
+    // throttle for the "native rate too low" warning
+    let mut last_warn = Instant::now();
 
     while running.load(Ordering::Relaxed) {
-        // block until we need to sample
-        pace(start, period, n);
-        let current_index = n;
-        n += 1;
-
-        let raw = match spi.read_raw12() {
-            Ok(raw) => raw,
-            Err(err) => {
-                eprintln!("chordsense-iod: SPI read failed: {err}");
-                continue;
+        raw.clear();
+        let mut read_err = None;
+        for _ in 0..READ_CHUNK {
+            match spi.read_raw12() {
+                Ok(code) => raw.push(code),
+                Err(err) => {
+                    read_err = Some(err);
+                    break;
+                }
             }
-        };
-        let sample = raw12_to_i16(raw);
+        }
+        if raw.is_empty() {
+            if let Some(err) = read_err {
+                eprintln!("chordsense-iod: SPI read failed: {err}");
+            }
+            continue;
+        }
+        let now = start.elapsed().as_secs_f64();
+
+        if !primed {
+            // seed interpolation state; nothing to emit until we have a span
+            prev_t = now;
+            prev_val = raw12_to_i16(raw[raw.len() - 1]) as f64;
+            out_index = (now / out_period).ceil() as u64;
+            primed = true;
+            continue;
+        }
+
+        // Model this chunk's samples as evenly spaced across (prev_t, now].
+        // Reading is continuous (no idle gap between chunks), so this holds
+        // closely as long as the native rate stays well above the target.
+        let span = (now - prev_t).max(1e-9);
+        let step = span / raw.len() as f64;
+
+        let native_rate = raw.len() as f64 / span;
+        if native_rate < SAMPLE_RATE_HZ as f64 * 1.1
+            && last_warn.elapsed() > Duration::from_secs(2)
+        {
+            eprintln!(
+                "chordsense-iod: ADC native rate ~{native_rate:.0} Hz is near the \
+                 {SAMPLE_RATE_HZ} Hz target — capture quality will degrade"
+            );
+            last_warn = Instant::now();
+        }
+
+        out.clear();
+        loop {
+            let t_out = out_index as f64 * out_period;
+            if t_out > now {
+                break;
+            }
+            // position of t_out within this batch: 0 -> prev_val, k -> raw[k-1]
+            let pos = ((t_out - prev_t) / step).clamp(0.0, raw.len() as f64);
+            let i = pos.floor() as usize;
+            let frac = pos - i as f64;
+            let left = if i == 0 {
+                prev_val
+            } else {
+                raw12_to_i16(raw[i - 1]) as f64
+            };
+            let right = if i >= raw.len() {
+                raw12_to_i16(raw[raw.len() - 1]) as f64
+            } else {
+                raw12_to_i16(raw[i]) as f64
+            };
+            let sample = (left + (right - left) * frac).round();
+            out.push(sample.clamp(i16::MIN as f64, i16::MAX as f64) as i16);
+            out_index += 1;
+        }
+
+        prev_t = now;
+        prev_val = raw12_to_i16(raw[raw.len() - 1]) as f64;
+
+        if out.is_empty() {
+            continue;
+        }
 
         let mut guard = mode.lock().unwrap();
         match &mut *guard {
             Mode::Idle => {}
             Mode::Capturing(sink) => {
-                if let Err(err) = sink.writer.write_sample(sample) {
-                    eprintln!("chordsense-iod: WAV write failed: {err}");
-                    continue;
+                for &sample in &out {
+                    if let Err(err) = sink.writer.write_sample(sample) {
+                        eprintln!("chordsense-iod: WAV write failed: {err}");
+                        break;
+                    }
+                    sink.samples_written += 1;
                 }
-                sink.samples_written += 1;
             }
             Mode::Streaming(subs) => {
+                let batch_first_index = out_index - out.len() as u64;
                 for sub in subs.iter_mut() {
-                    if sub.buffer.is_empty() {
-                        sub.buffer_start_index = current_index;
-                    }
-                    sub.buffer.push(sample);
-                    if sub.buffer.len() >= sub.frame_samples {
-                        let frame = SampleFrame {
-                            sample_index: sub.buffer_start_index,
-                            samples: std::mem::take(&mut sub.buffer),
-                        };
-                        // drop-newest-on-full: a slow reader loses the odd
-                        // frame instead of stalling the sampling thread. a
-                        // disconnected reader is left for stop_stream() to
-                        // clean up (called from the connection handler on
-                        // disconnect), not handled here.
-                        let _ = sub.tx.try_send(frame);
+                    for (k, &sample) in out.iter().enumerate() {
+                        if sub.buffer.is_empty() {
+                            sub.buffer_start_index = batch_first_index + k as u64;
+                        }
+                        sub.buffer.push(sample);
+                        if sub.buffer.len() >= sub.frame_samples {
+                            let frame = SampleFrame {
+                                sample_index: sub.buffer_start_index,
+                                samples: std::mem::take(&mut sub.buffer),
+                            };
+                            // drop-newest-on-full: a slow reader loses the odd
+                            // frame instead of stalling the sampling thread. a
+                            // disconnected reader is left for stop_stream() to
+                            // clean up (called from the connection handler on
+                            // disconnect), not handled here.
+                            let _ = sub.tx.try_send(frame);
+                        }
                     }
                 }
             }
-        }
-    }
-}
-
-/// blocks until the nth sample's deadline arrives
-fn pace(start: Instant, period: Duration, n: u64) {
-    let target = start + period.mul_f64(n as f64);
-    loop {
-        let now = Instant::now();
-        if now >= target {
-            return;
-        }
-        let remaining = target - now;
-        if remaining > Duration::from_micros(200) {
-            thread::sleep(remaining - Duration::from_micros(100));
-        } else {
-            std::hint::spin_loop();
         }
     }
 }

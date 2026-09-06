@@ -2,10 +2,24 @@
 name = "chordsense-iod"
 version = "0.1.0"
 edition = "2024"
+# examples/support/ holds shared helper modules, not example binaries
+autoexamples = false
 
 [[bin]]
 name = "chordsense-iod"
 path = "src/main.rs"
+
+[[example]]
+name = "spi_probe"
+path = "examples/spi_probe.rs"
+
+[[example]]
+name = "spi_freq"
+path = "examples/spi_freq.rs"
+
+[[example]]
+name = "spi_capture_test"
+path = "examples/spi_capture_test.rs"
 
 [dependencies]
 base64 = "0.22"
