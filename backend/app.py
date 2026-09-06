@@ -5,7 +5,8 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 from werkzeug.utils import secure_filename
-from guitar_input import Worker
+
+from iod_client import IodClient, IodError
 
 BASE_DIR = Path(__file__).resolve().parent
 # Original: MODEL_REPO = BASE_DIR / "model_repo"
@@ -24,7 +25,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
 chord_recognizer = None
-worker = Worker()
+iod = IodClient()
 
 
 def get_chord_recognizer():
@@ -165,12 +166,12 @@ def analyze():
 def begin_recording():
     print("=== /begin_recording request received ===", flush=True)
     try:
-        print("Starting recording...", flush=True)
-        worker.start()
+        print("Attaching iod capture sink...", flush=True)
+        iod.start_capture()
         return jsonify({"success": True, "message": "Recording started"})
-    except Exception as e:
+    except IodError as e:
         print(f"Begin recording failed: {e}", flush=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 502
 
 @app.post("/end_recording")
 def end_recording():
@@ -178,15 +179,20 @@ def end_recording():
     output_lab_path = OUTPUTS_DIR / "temp.lab"
 
     try:
-        print("Ending recording...", flush=True)
-        audio = worker.stop()
+        print("Detaching iod capture sink...", flush=True)
+        wav_path, capture_duration = iod.stop_capture()
+        print(f"Capture written to {wav_path} ({capture_duration:.2f}s)", flush=True)
 
-        if audio is None:
-            return jsonify({"success": False, "error": "No frames captured"}), 400
-        get_chord_recognizer().from_audio(audio, output_lab_path)
+        print("Starting chord recognition...", flush=True)
+        wrote_lab = get_chord_recognizer().from_file(wav_path, output_lab_path)
+        if not wrote_lab or not output_lab_path.exists():
+            return jsonify({
+                "success": False,
+                "error": "Chord recognition produced no output for this capture",
+            }), 500
 
         chords = parse_lab_file(output_lab_path)
-        duration = chords[-1]["end"] if chords else 0.0
+        duration = chords[-1]["end"] if chords else capture_duration
 
         print(f"Model finished. Parsed {len(chords)} chords.", flush=True)
 
@@ -202,7 +208,11 @@ def end_recording():
             "stdout": "",
             "stderr": "",
             "lab_file": str(output_lab_path),
+            "wav_path": str(wav_path),
         })
+    except IodError as e:
+        print(f"End recording failed (iod): {e}", flush=True)
+        return jsonify({"success": False, "error": str(e)}), 502
     except Exception as e:
         print(f"End recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500

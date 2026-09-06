@@ -1,5 +1,12 @@
 Flask==3.0.3
 Werkzeug==3.0.3
-pyserial
 numpy
 librosa
+scipy
+
+# chordsense_cnn (the live Record-mode model) runtime. Use the CPU build — the
+# default PyPI index serves CUDA wheels on x86 that pull ~2 GB of libs this Pi
+# never uses. On the Pi (aarch64) plain `pip install torch` is already CPU-only;
+# elsewhere install it explicitly:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch

@@ -110,11 +110,25 @@ struct StreamFrameMsg {
 pub struct Daemon {
     sampler: AdcSampler,
     playback: Arc<Mutex<Playback>>,
+    captures_dir: PathBuf,
 }
 
 impl Daemon {
-    pub fn new(sampler: AdcSampler, playback: Playback) -> Self {
-        Self { sampler, playback: Arc::new(Mutex::new(playback)) }
+    pub fn new(sampler: AdcSampler, playback: Playback, captures_dir: PathBuf) -> Self {
+        Self {
+            sampler,
+            playback: Arc::new(Mutex::new(playback)),
+            captures_dir,
+        }
+    }
+
+    /// path for the next capture WAV, under the daemon's configured captures dir
+    fn capture_path(&self) -> PathBuf {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        self.captures_dir.join(format!("capture-{timestamp}.wav"))
     }
 
     /// serves connections until the process is killed
@@ -210,7 +224,7 @@ impl Daemon {
     fn dispatch(&self, cmd: Command) -> Response {
         match cmd {
             Command::StartCapture => {
-                let path = capture_path();
+                let path = self.capture_path();
                 match self.sampler.start_capture(&path) {
                     Ok(()) => Response::ok(),
                     Err(err) => Response::err(err),
@@ -297,10 +311,3 @@ fn pcm16_to_bytes(samples: &[i16]) -> Vec<u8> {
     bytes
 }
 
-fn capture_path() -> PathBuf {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    crate::capture::default_captures_dir().join(format!("capture-{timestamp}.wav"))
-}
