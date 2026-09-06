@@ -170,13 +170,14 @@ window.addEventListener(
 
 initRecordMode({
 
-    onAnalysisComplete(result) {
+    async onAnalysisComplete(result) {
 
         /*
          * Send the recorded analysis to the
-         * Play Along code.
+         * Play Along code, which also loads the
+         * captured take for playback.
          */
-        loadRecordedAnalysis(result);
+        await loadRecordedAnalysis(result);
 
         /*
          * Same behavior as old Rust UI:
