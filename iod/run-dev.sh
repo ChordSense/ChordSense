@@ -5,8 +5,12 @@
 # Runs the release binary with a control socket and captures directory that
 # don't need root. The backend's iod_client resolves the same default socket
 # path, so when both run as the same user (with XDG_RUNTIME_DIR set) nothing
-# extra is needed. A hardened systemd unit is a later task; for now run this in
-# tmux alongside the backend.
+# extra is needed.
+#
+# This path does NOT get SCHED_FIFO (a normal user can't request it) so capture
+# quality degrades under load — fine for wiring work, not a demo. For real-time
+# priority + restart-on-crash + start-on-boot, install the systemd service
+# instead: see iod/deploy/README.md.
 #
 # Env overrides (all optional):
 #   CHORDSENSE_IOD_SOCKET        control socket path

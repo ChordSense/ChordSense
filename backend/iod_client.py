@@ -23,21 +23,35 @@ import socket
 from pathlib import Path
 
 
+SYSTEM_SOCKET_PATH = "/run/chordsense/iod.sock"
+
+
 def default_socket_path() -> str:
     """Resolve the control socket path.
 
-    Mirrors ``iod``'s own ``default_socket_path()`` (``iod/src/main.rs``) so the
-    two agree with no configuration when run as the same user: an explicit
-    ``CHORDSENSE_IOD_SOCKET`` wins, otherwise the per-user runtime dir, otherwise
-    the system path a ``systemd`` unit would set up.
+    Resolution order:
+
+    1. ``CHORDSENSE_IOD_SOCKET`` if set (the systemd unit sets this explicitly).
+    2. ``/run/chordsense/iod.sock`` if it exists — i.e. the daemon is running as
+       the system service (`iod/deploy/chordsense-iod.service`), whose
+       ``RuntimeDirectory=`` owns that path.
+    3. ``$XDG_RUNTIME_DIR/chordsense-iod.sock`` — the default `iod/run-dev.sh`
+       uses when run by hand as the logged-in user.
+    4. ``/run/chordsense/iod.sock`` as a last resort.
+
+    Steps 2-4 mirror ``iod``'s own ``default_socket_path()`` (``iod/src/main.rs``)
+    plus the "prefer the service socket if present" shortcut, so backend and
+    daemon agree with no configuration in both the service and dev-script cases.
     """
     override = os.environ.get("CHORDSENSE_IOD_SOCKET")
     if override:
         return override
+    if Path(SYSTEM_SOCKET_PATH).exists():
+        return SYSTEM_SOCKET_PATH
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if runtime_dir:
         return str(Path(runtime_dir) / "chordsense-iod.sock")
-    return "/run/chordsense/iod.sock"
+    return SYSTEM_SOCKET_PATH
 
 
 class IodError(RuntimeError):
