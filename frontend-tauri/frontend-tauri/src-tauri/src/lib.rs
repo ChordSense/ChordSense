@@ -77,6 +77,11 @@ struct AnalyzeResponse {
 
     #[serde(default)]
     error: Option<String>,
+
+    /// Absolute path to the captured WAV, set by /end_recording so the UI can
+    /// play the take back. Absent for /analyze (the UI already has that file).
+    #[serde(default)]
+    wav_path: Option<String>,
 }
 
 

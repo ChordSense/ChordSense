@@ -1,0 +1,53 @@
+[Unit]
+Description=ChordSense hardware I/O daemon (SPI ADC capture + I2S playback)
+Documentation=https://github.com/ChordSense/ChordSense
+After=sound.target
+Wants=sound.target
+
+[Service]
+Type=exec
+User=chordsense
+Group=chordsense
+# `chordsense` is already in the spi / gpio / audio groups, so it can reach
+# /dev/spidev0.0 and ALSA without extra privilege.
+
+# --- paths (adjust all four if the checkout lives elsewhere) ---
+WorkingDirectory=/home/chordsense/workspace/ChordSense
+EnvironmentFile=-/home/chordsense/workspace/ChordSense/iod/deploy/chordsense-iod.env
+ExecStart=/home/chordsense/workspace/ChordSense/iod/target/release/chordsense-iod
+
+# systemd creates and owns /run/chordsense (for the control socket) on start
+# and removes it on stop.
+RuntimeDirectory=chordsense
+RuntimeDirectoryMode=0750
+
+# --- real-time sampling ---
+# PID 1 applies this policy before exec, so the daemon runs SCHED_FIFO even
+# before its own try_raise_realtime_priority() call. LimitRTPRIO lets that
+# in-process call succeed too (it re-asserts priority on the sampling thread)
+# instead of logging the "needs CAP_SYS_NICE" warning.
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=20
+LimitRTPRIO=21
+# hardening presets sometimes flip this on; SCHED_FIFO needs it off.
+RestrictRealtime=no
+
+# --- resilience ---
+Restart=on-failure
+RestartSec=2
+
+# --- light sandboxing (kept loose: the daemon needs spidev + ALSA) ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/chordsense/workspace/ChordSense/runtime
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+DevicePolicy=closed
+DeviceAllow=/dev/spidev0.0 rw
+DeviceAllow=char-alsa rw
+# Deliberately NOT set: PrivateDevices=yes (would hide /dev/spidev0.0).
+
+[Install]
+WantedBy=multi-user.target

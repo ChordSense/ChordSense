@@ -862,7 +862,7 @@ audio.volume = 0.8;
 
 updatePlayerUI();
 
-export function loadRecordedAnalysis(
+export async function loadRecordedAnalysis(
     result
 ) {
 
@@ -895,11 +895,6 @@ export function loadRecordedAnalysis(
         "Recorded Session";
 
 
-    status.textContent =
-        `Recorded analysis loaded. ` +
-        `${state.chords.length} chords found.`;
-
-
     emptyState.classList.add(
         "hidden"
     );
@@ -907,6 +902,73 @@ export function loadRecordedAnalysis(
     chordDisplay.classList.remove(
         "hidden"
     );
+
+
+    /*
+     * Load the take itself so the chord diagrams roll
+     * against it, the same way a file loaded in Sense
+     * mode does.
+     *
+     * iod writes the WAV on this machine and the backend
+     * hands back its absolute path in wav_path.
+     */
+    const wavPath = result.wav_path;
+
+    if (wavPath) {
+
+        try {
+
+            const audioBytes = await invoke(
+                "load_audio_file",
+                {
+                    path: wavPath
+                }
+            );
+
+            const audioBlob = new Blob(
+                [new Uint8Array(audioBytes)],
+                {
+                    type: getAudioMimeType(wavPath)
+                }
+            );
+
+            audio.src =
+                URL.createObjectURL(audioBlob);
+
+            audio.load();
+
+            /*
+             * Setting this is what re-enables the transport
+             * controls: play/pause, stop and seek all bail
+             * out while audioPath is null.
+             */
+            state.audioPath = wavPath;
+
+            status.textContent =
+                `Recorded analysis loaded. ` +
+                `${state.chords.length} chords found. ` +
+                `Press play to hear your take.`;
+
+        } catch (error) {
+
+            console.error(error);
+
+            /*
+             * Analysis still succeeded, so show the chords
+             * rather than failing the whole recording.
+             */
+            status.textContent =
+                `Recorded analysis loaded ` +
+                `(${state.chords.length} chords), but the ` +
+                `take could not be played back: ${error}`;
+        }
+
+    } else {
+
+        status.textContent =
+            `Recorded analysis loaded. ` +
+            `${state.chords.length} chords found.`;
+    }
 
 
     updateChordDisplay();

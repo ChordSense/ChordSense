@@ -247,6 +247,9 @@ fn sampling_loop(spi: Mcp3201, mode: Arc<Mutex<Mode>>, running: Arc<AtomicBool>)
             if let Some(err) = read_err {
                 eprintln!("chordsense-iod: SPI read failed: {err}");
             }
+            // back off before retrying: under SCHED_FIFO a persistently failing
+            // read would otherwise spin this thread and starve the core
+            thread::sleep(Duration::from_millis(5));
             continue;
         }
         let now = start.elapsed().as_secs_f64();
