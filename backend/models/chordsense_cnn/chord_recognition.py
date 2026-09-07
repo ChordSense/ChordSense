@@ -1,15 +1,12 @@
-import sys
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-
-_backend = Path(__file__).resolve().parent.parent.parent
-if str(_backend) not in sys.path:
-    sys.path.insert(0, str(_backend))
+import sys
 
 import numpy as np
+import numpy.typing as npt
 import torch
 
-from models.chordsense_cnn.audio_processing import (
+from .audio_processing import (
     AudioBuffer,
     DEFAULT_PREPROCESSING_CONFIG,
     PreprocessedAudio,
@@ -18,14 +15,25 @@ from models.chordsense_cnn.audio_processing import (
     load_audio_file,
     preprocess_audio,
 )
-from models.chordsense_cnn.config import (
+from .config import (
     CHORD_CLASSES,
     NUM_CLASSES,
     RECORDING_OUTPUT_FILE,
     VOTE_WINDOW,
 )
-from models.chordsense_cnn.model import build_model
-from models.chordsense_cnn.smoother import final_prediction, smooth_predictions
+from .model import build_model
+from .smoother import PredictionResult, final_prediction, smooth_predictions
+
+MODEL_DIR = Path(__file__).resolve().parent
+DEFAULT_CHECKPOINT = MODEL_DIR / "checkpoints" / "latest_chord_cnn.pth"
+FloatArray = npt.NDArray[np.float32]
+
+
+@dataclass
+class NormalizedSegment:
+    start: float
+    end: float
+    label: int
 
 
 class ChordRecognizer:
@@ -89,8 +97,8 @@ class ChordRecognizer:
 
     def from_chroma(
         self,
-        analysis_waveform: np.ndarray,
-        chroma: np.ndarray,
+        analysis_waveform: FloatArray,
+        chroma: FloatArray,
         output_path: str | Path = RECORDING_OUTPUT_FILE,
     ) -> bool:
         windows = create_feature_windows(chroma, self.preprocessing).values
@@ -107,7 +115,7 @@ class ChordRecognizer:
 
     def generate_lab_file(
         self,
-        model_predictions: dict,
+        model_predictions: PredictionResult,
         output_path: str | Path = RECORDING_OUTPUT_FILE,
         min_duration: float = 0.4,
     ) -> bool:
@@ -117,38 +125,39 @@ class ChordRecognizer:
 
         noise_index = CHORD_CLASSES.index("Noise")
         frame_seconds = self.preprocessing.hop_length / self.preprocessing.sample_rate
-        normalized = [
-            [start * frame_seconds, end * frame_seconds, label]
+        normalized: list[NormalizedSegment] = [
+            NormalizedSegment(start * frame_seconds, end * frame_seconds, label)
             for start, end, label in segments
         ]
 
         first_chord = next(
-            (i for i, segment in enumerate(normalized) if segment[2] != noise_index),
+            (i for i, segment in enumerate(normalized) if segment.label != noise_index),
             None,
         )
         last_chord = next(
-            (i for i in range(len(normalized) - 1, -1, -1) if normalized[i][2] != noise_index),
+            (i for i in range(len(normalized) - 1, -1, -1) if normalized[i].label != noise_index),
             None,
         )
         if first_chord is None:
-            normalized = [[normalized[0][0], normalized[-1][1], noise_index]]
+            normalized = [NormalizedSegment(normalized[0].start, normalized[-1].end, noise_index)]
         else:
+            assert last_chord is not None
             for i in range(first_chord + 1, last_chord):
-                if normalized[i][2] == noise_index:
-                    normalized[i][2] = normalized[i - 1][2]
+                if normalized[i].label == noise_index:
+                    normalized[i].label = normalized[i - 1].label
 
         normalized = self._merge_adjacent(normalized)
         changed = True
         while changed and len(normalized) > 1:
             changed = False
             for i, segment in enumerate(normalized):
-                edge_noise = segment[2] == noise_index and (i == 0 or i == len(normalized) - 1)
-                if edge_noise or segment[1] - segment[0] >= min_duration:
+                edge_noise = segment.label == noise_index and (i == 0 or i == len(normalized) - 1)
+                if edge_noise or segment.end - segment.start >= min_duration:
                     continue
                 if i > 0:
-                    normalized[i - 1][1] = segment[1]
+                    normalized[i - 1].end = segment.end
                 else:
-                    normalized[i + 1][0] = segment[0]
+                    normalized[i + 1].start = segment.start
                 normalized.pop(i)
                 normalized = self._merge_adjacent(normalized)
                 changed = True
@@ -156,19 +165,19 @@ class ChordRecognizer:
 
         try:
             with Path(output_path).open("w", encoding="utf-8") as output:
-                for start, end, label in normalized:
-                    name = "N" if label == noise_index else self.label_names[label]
-                    output.write(f"{start}\t{end}\t{name}\n")
+                for segment in normalized:
+                    name = "N" if segment.label == noise_index else self.label_names[segment.label]
+                    output.write(f"{segment.start}\t{segment.end}\t{name}\n")
         except OSError:
             return False
         return True
 
     @staticmethod
-    def _merge_adjacent(segments: list[list]) -> list[list]:
+    def _merge_adjacent(segments: list[NormalizedSegment]) -> list[NormalizedSegment]:
         merged = [segments[0]]
         for segment in segments[1:]:
-            if segment[2] == merged[-1][2]:
-                merged[-1][1] = segment[1]
+            if segment.label == merged[-1].label:
+                merged[-1].end = segment.end
             else:
                 merged.append(segment)
         return merged
@@ -179,7 +188,7 @@ def main() -> int:
     if len(args) != 2:
         print("Usage: python chord_recognition.py <audio_path> <output_path>")
         return 1
-    recognizer = ChordRecognizer("checkpoints/latest_chord_cnn.pth")
+    recognizer = ChordRecognizer(DEFAULT_CHECKPOINT)
     recognizer.from_file(args[0], args[1])
     return 0
 
