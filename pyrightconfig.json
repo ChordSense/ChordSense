@@ -1,0 +1,19 @@
+{
+  "include": [
+    "backend/models/chordsense_cnn/audio_processing.py",
+    "backend/models/chordsense_cnn/chord_recognition.py",
+    "backend/models/chordsense_cnn/config.py",
+    "backend/models/chordsense_cnn/model.py",
+    "backend/models/chordsense_cnn/smoother.py"
+  ],
+  "exclude": [
+    "**/venv",
+    "**/__pycache__"
+  ],
+  "extraPaths": ["backend"],
+  "venvPath": "backend/models/chordsense_cnn",
+  "venv": "venv",
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingTypeStubs": false
+}
