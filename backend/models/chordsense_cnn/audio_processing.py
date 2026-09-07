@@ -4,11 +4,16 @@ from typing import Any
 
 import librosa
 import numpy as np
+import numpy.typing as npt
+
+
+FloatArray = npt.NDArray[np.float32]
+IntArray = npt.NDArray[np.int64]
 
 
 @dataclass(frozen=True)
 class AudioBuffer:
-    samples: np.ndarray
+    samples: FloatArray
     sample_rate: int
 
     def __post_init__(self) -> None:
@@ -64,8 +69,8 @@ DEFAULT_PREPROCESSING_CONFIG = PreprocessingConfig()
 @dataclass(frozen=True)
 class PreprocessedAudio:
     waveform: AudioBuffer
-    analysis_waveform: np.ndarray
-    chroma: np.ndarray
+    analysis_waveform: FloatArray
+    chroma: FloatArray
 
     @property
     def duration_seconds(self) -> float:
@@ -74,16 +79,16 @@ class PreprocessedAudio:
 
 @dataclass(frozen=True)
 class FeatureWindowBatch:
-    values: np.ndarray
-    start_frames: np.ndarray
-    center_frames: np.ndarray
-    end_frames: np.ndarray
+    values: FloatArray
+    start_frames: IntArray
+    center_frames: IntArray
+    end_frames: IntArray
     source_frame_count: int
 
 
 def load_audio_file(path: str | Path) -> AudioBuffer:
     samples, sample_rate = librosa.load(path, sr=None, mono=True)
-    return AudioBuffer(samples, sample_rate)
+    return AudioBuffer(np.asarray(samples, dtype=np.float32), int(sample_rate))
 
 
 def load_dataset_audio(source: dict[str, Any]) -> AudioBuffer:
@@ -135,7 +140,7 @@ def preprocess_audio(
 
 
 def create_feature_windows(
-    chroma: np.ndarray,
+    chroma: FloatArray,
     config: PreprocessingConfig = DEFAULT_PREPROCESSING_CONFIG,
 ) -> FeatureWindowBatch:
     chroma = np.asarray(chroma, dtype=np.float32)
@@ -178,7 +183,7 @@ def create_feature_windows(
 def extract_chroma_cqt(
     source: str | Path | dict[str, Any],
     config: PreprocessingConfig = DEFAULT_PREPROCESSING_CONFIG,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[FloatArray, FloatArray]:
     audio = (
         load_audio_file(source)
         if isinstance(source, (str, Path))
@@ -189,9 +194,9 @@ def extract_chroma_cqt(
 
 
 def slice_into_windows(
-    chroma: np.ndarray,
+    chroma: FloatArray,
     context_frames: int | None = None,
-) -> np.ndarray:
+) -> FloatArray:
     config = DEFAULT_PREPROCESSING_CONFIG
     if context_frames is not None:
         config = replace(config, context_frames=context_frames)
