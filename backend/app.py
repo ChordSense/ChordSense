@@ -7,6 +7,7 @@ from flask import Flask, jsonify, request
 from werkzeug.utils import secure_filename
 
 from iod_client import IodClient, IodError
+from web_upload import web_upload
 
 BASE_DIR = Path(__file__).resolve().parent
 # Original: MODEL_REPO = BASE_DIR / "model_repo"
@@ -22,6 +23,7 @@ for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
+app.register_blueprint(web_upload)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
 chord_recognizer = None
@@ -219,4 +221,4 @@ def end_recording():
     
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5051, debug=False)
+    app.run(host="0.0.0.0", port=5051, debug=False)
