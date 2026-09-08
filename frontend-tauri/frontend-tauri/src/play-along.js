@@ -8,7 +8,12 @@ console.log("ChordSense JS loaded");
 
 const state = {
     audioPath: null,
+
+    uploadedFileName: null,
+
     audioName: null,
+
+    audioObjectUrl: null,
 
     analyzing: false,
 
@@ -23,6 +28,29 @@ const state = {
 const audio = document.querySelector("#audio-player");
 
 const loadButton = document.querySelector("#load-audio");
+const audioLibraryModal = document.querySelector("#audio-library-modal");
+
+const audioLibraryList = document.querySelector("#audio-library-list");
+
+const audioLibraryEmpty = document.querySelector("#audio-library-empty");
+
+const audioLibraryStatus = document.querySelector("#audio-library-status");
+
+const closeAudioLibraryButton = document.querySelector("#close-audio-library");
+
+const cancelAudioLibraryButton = document.querySelector("#cancel-audio-library");
+
+const loadLibrarySongButton = document.querySelector("#load-library-song");
+
+const browseLocalAudioButton = document.querySelector("#browse-local-audio");
+const libraryState = {
+    open: false,
+
+    songs: [],
+
+    selectedIndex: -1,
+};
+
 const analyzeButton = document.querySelector("#analyze");
 
 const stopButton = document.querySelector("#stop");
@@ -74,6 +102,428 @@ const incomingLabel =
 
 const chordTrack =
     document.querySelector("#chord-track");
+
+function formatFileSize(bytes) {
+
+    if (!Number.isFinite(bytes)) {
+        return "";
+    }
+
+    if (bytes < 1024) {
+        return `${bytes} B`;
+    }
+
+    if (bytes < 1024 * 1024) {
+        return (
+            `${(bytes / 1024).toFixed(1)} KB`
+        );
+    }
+
+    return (
+        `${(
+            bytes /
+            (1024 * 1024)
+        ).toFixed(1)} MB`
+    );
+}
+
+function renderAudioLibrary() {
+
+    audioLibraryList.replaceChildren();
+
+
+    if (!libraryState.songs.length) {
+
+        audioLibraryEmpty.classList.remove(
+            "hidden"
+        );
+
+        loadLibrarySongButton.disabled =
+            true;
+
+        return;
+    }
+
+
+    audioLibraryEmpty.classList.add(
+        "hidden"
+    );
+
+
+    libraryState.songs.forEach(
+        (song, index) => {
+
+            const row =
+                document.createElement(
+                    "button"
+                );
+
+            row.type =
+                "button";
+
+            row.className =
+                "audio-library-song";
+
+            row.tabIndex =
+                -1;
+
+            row.setAttribute(
+                "role",
+                "option"
+            );
+
+
+            const name =
+                document.createElement(
+                    "span"
+                );
+
+            name.className =
+                "audio-library-song-name";
+
+            name.textContent =
+                song.name;
+
+
+            const size =
+                document.createElement(
+                    "span"
+                );
+
+            size.className =
+                "audio-library-song-size";
+
+            size.textContent =
+                formatFileSize(
+                    song.size
+                );
+
+
+            row.append(
+                name,
+                size
+            );
+
+
+            row.addEventListener(
+                "click",
+                () => {
+                    selectLibrarySong(
+                        index
+                    );
+                }
+            );
+
+
+            row.addEventListener(
+                "dblclick",
+                () => {
+                    selectLibrarySong(
+                        index
+                    );
+
+                    loadSelectedLibrarySong();
+                }
+            );
+
+
+            audioLibraryList.appendChild(
+                row
+            );
+        }
+    );
+
+
+    selectLibrarySong(
+        libraryState.selectedIndex >= 0
+            ? libraryState.selectedIndex
+            : 0
+    );
+}
+
+function selectLibrarySong(index) {
+
+    const count =
+        libraryState.songs.length;
+
+
+    if (!count) {
+
+        libraryState.selectedIndex =
+            -1;
+
+        loadLibrarySongButton.disabled =
+            true;
+
+        return;
+    }
+
+
+    /*
+     * Wrap around:
+     *
+     * Up on first song -> last song
+     * Down on last song -> first song
+     */
+    const normalizedIndex =
+        (
+            index +
+            count
+        ) % count;
+
+
+    libraryState.selectedIndex =
+        normalizedIndex;
+
+
+    const rows =
+        audioLibraryList.querySelectorAll(
+            ".audio-library-song"
+        );
+
+
+    rows.forEach(
+        (row, rowIndex) => {
+
+            const selected =
+                rowIndex ===
+                normalizedIndex;
+
+            row.classList.toggle(
+                "selected",
+                selected
+            );
+
+            row.setAttribute(
+                "aria-selected",
+                String(selected)
+            );
+        }
+    );
+
+
+    const selectedRow =
+        rows[normalizedIndex];
+
+
+    selectedRow?.scrollIntoView({
+        block: "nearest"
+    });
+
+
+    loadLibrarySongButton.disabled =
+        false;
+}
+
+async function openAudioLibrary() {
+
+    libraryState.open =
+        true;
+
+    libraryState.songs =
+        [];
+
+    libraryState.selectedIndex =
+        -1;
+
+
+    audioLibraryModal.classList.remove(
+        "hidden"
+    );
+
+    audioLibraryModal.setAttribute(
+        "aria-hidden",
+        "false"
+    );
+
+
+    audioLibraryList.replaceChildren();
+
+    audioLibraryEmpty.classList.add(
+        "hidden"
+    );
+
+    loadLibrarySongButton.disabled =
+        true;
+
+
+    audioLibraryStatus.classList.remove(
+        "error"
+    );
+
+    audioLibraryStatus.textContent =
+        "Loading uploaded songs...";
+
+
+    try {
+
+        const songs =
+            await invoke(
+                "list_uploaded_audio"
+            );
+
+
+        libraryState.songs =
+            songs ?? [];
+
+
+        libraryState.selectedIndex =
+            libraryState.songs.length
+                ? 0
+                : -1;
+
+
+        audioLibraryStatus.textContent =
+            libraryState.songs.length
+                ? `${libraryState.songs.length} song${
+                    libraryState.songs.length === 1
+                        ? ""
+                        : "s"
+                  } available.`
+                : "";
+
+
+        renderAudioLibrary();
+
+
+        requestAnimationFrame(
+            () => {
+                audioLibraryList.focus();
+            }
+        );
+
+    } catch (error) {
+
+        console.error(error);
+
+        audioLibraryStatus.classList.add(
+            "error"
+        );
+
+        audioLibraryStatus.textContent =
+            `Could not load ChordSense Library: ${error}`;
+
+        audioLibraryEmpty.classList.remove(
+            "hidden"
+        );
+
+        audioLibraryEmpty.textContent =
+            "ChordSense Library is unavailable.";
+    }
+}
+
+function closeAudioLibrary() {
+
+    libraryState.open =
+        false;
+
+
+    audioLibraryModal.classList.add(
+        "hidden"
+    );
+
+
+    audioLibraryModal.setAttribute(
+        "aria-hidden",
+        "true"
+    );
+
+
+    loadButton.focus();
+}
+
+function applyLoadedAudio({
+    name,
+    bytes,
+    localPath = null,
+    uploadedFileName = null
+}) {
+
+    audio.pause();
+
+
+    /*
+     * Clean up old Blob URL.
+     */
+    if (state.audioObjectUrl) {
+
+        URL.revokeObjectURL(
+            state.audioObjectUrl
+        );
+
+        state.audioObjectUrl =
+            null;
+    }
+
+
+    state.audioPath =
+        localPath;
+
+    state.uploadedFileName =
+        uploadedFileName;
+
+    state.audioName =
+        name;
+
+
+    state.chords = [];
+
+    state.analysisDuration =
+        0;
+
+    state.lastActiveChordIndex =
+        -1;
+
+
+    songName.textContent =
+        name;
+
+
+    status.textContent =
+        "Audio loaded. Press Analyze.";
+
+
+    emptyState.innerHTML =
+        "Audio loaded.<br />Press Analyze to detect chords.";
+
+
+    chordDisplay.classList.add(
+        "hidden"
+    );
+
+    emptyState.classList.remove(
+        "hidden"
+    );
+
+
+    const audioBlob =
+        new Blob(
+            [
+                new Uint8Array(
+                    bytes
+                )
+            ],
+            {
+                type:
+                    getAudioMimeType(
+                        name
+                    )
+            }
+        );
+
+
+    state.audioObjectUrl =
+        URL.createObjectURL(
+            audioBlob
+        );
+
+
+    audio.src =
+        state.audioObjectUrl;
+
+
+    audio.load();
+}
 
 function simplifyChord(raw) {
     if (!raw || raw === "N") {
@@ -511,93 +961,186 @@ function prettyChord(raw) {
 }
 
 function getAudioMimeType(path) {
-    const lower = path.toLowerCase();
+
+    const lower =
+        path.toLowerCase();
+
 
     if (lower.endsWith(".mp3")) {
         return "audio/mpeg";
     }
 
+
     if (lower.endsWith(".wav")) {
         return "audio/wav";
     }
+
 
     if (lower.endsWith(".ogg")) {
         return "audio/ogg";
     }
 
+
+    if (lower.endsWith(".flac")) {
+        return "audio/flac";
+    }
+
+
+    if (lower.endsWith(".m4a")) {
+        return "audio/mp4";
+    }
+
+
     return "application/octet-stream";
 }
 
-async function loadAudio() {
-    const selected = await open({
-        multiple: false,
+async function browseLocalAudio() {
 
-        filters: [
-            {
-                name: "Audio",
-                extensions: [
-                    "wav",
-                    "mp3",
-                    "ogg"
-                ]
-            }
-        ]
-    });
+    const selected =
+        await open({
+            multiple: false,
+
+            filters: [
+                {
+                    name: "Audio",
+
+                    extensions: [
+                        "wav",
+                        "mp3",
+                        "ogg",
+                        "flac",
+                        "m4a"
+                    ]
+                }
+            ]
+        });
+
 
     if (!selected) {
         return;
     }
 
-    state.audioPath = selected;
 
-    state.audioName =
-        selected
-            .replaceAll("\\", "/")
-            .split("/")
-            .pop();
+    try {
 
-    state.chords = [];
-    state.analysisDuration = 0;
-    state.lastActiveChordIndex = -1;
+        const audioBytes =
+            await invoke(
+                "load_audio_file",
+                {
+                    path: selected
+                }
+            );
 
-    songName.textContent =
-        state.audioName;
 
-    status.textContent =
-        "Audio loaded. Press Analyze.";
+        const name =
+            selected
+                .replaceAll(
+                    "\\",
+                    "/"
+                )
+                .split("/")
+                .pop();
 
-    emptyState.innerHTML =
-        "Audio loaded.<br />Press Analyze to detect chords.";
 
-    chordDisplay.classList.add("hidden");
-    emptyState.classList.remove("hidden");
+        applyLoadedAudio({
+            name,
+            bytes:
+                audioBytes,
 
-    audio.pause();
+            localPath:
+                selected,
 
-    const audioBytes = await invoke(
-        "load_audio_file",
-        {
-            path: selected
-        }
-    );
+            uploadedFileName:
+                null
+        });
 
-    const audioBlob = new Blob(
-        [new Uint8Array(audioBytes)],
-        {
-            type: getAudioMimeType(selected)
-        }
-    );
+    } catch (error) {
 
-    audio.src = URL.createObjectURL(audioBlob);
+        console.error(error);
 
-    audio.load();
+        status.textContent =
+            `Could not load audio: ${error}`;
+    }
+}
+
+async function loadSelectedLibrarySong() {
+
+    const index =
+        libraryState.selectedIndex;
+
+
+    if (
+        index < 0 ||
+        index >=
+            libraryState.songs.length
+    ) {
+        return;
+    }
+
+
+    const song =
+        libraryState.songs[index];
+
+
+    loadLibrarySongButton.disabled =
+        true;
+
+
+    audioLibraryStatus.textContent =
+        `Loading ${song.name}...`;
+
+
+    try {
+
+        const audioBytes =
+            await invoke(
+                "load_uploaded_audio",
+                {
+                    filename:
+                        song.name
+                }
+            );
+
+
+        applyLoadedAudio({
+            name:
+                song.name,
+
+            bytes:
+                audioBytes,
+
+            localPath:
+                null,
+
+            uploadedFileName:
+                song.name
+        });
+
+
+        closeAudioLibrary();
+
+    } catch (error) {
+
+        console.error(error);
+
+
+        audioLibraryStatus.classList.add(
+            "error"
+        );
+
+
+        audioLibraryStatus.textContent =
+            `Could not load ${song.name}: ${error}`;
+
+
+        loadLibrarySongButton.disabled =
+            false;
+    }
 }
 
 async function analyzeAudio() {
-    if (!state.audioPath) {
-        status.textContent =
-            "Please load an audio file first.";
-
+    if (!state.audioPath && !state.uploadedFileName) {
+        status.textContent = "Please load an audio file first.";
         return;
     }
 
@@ -617,13 +1160,44 @@ async function analyzeAudio() {
         "Loading analysis...";
 
     try {
-        const result = await invoke(
-            "analyze_audio",
-            {
-                path: state.audioPath,
-                chordDict: "submission"
-            }
-        );
+        let result;
+
+
+        if (state.uploadedFileName) {
+
+            /*
+            * Song came from runtime/uploads.
+            */
+            result =
+                await invoke(
+                    "analyze_uploaded_audio",
+                    {
+                        filename:
+                            state.uploadedFileName,
+
+                        chordDict:
+                            "submission"
+                    }
+                );
+
+        } else {
+
+            /*
+            * Song came from normal local
+            * filesystem picker.
+            */
+            result =
+                await invoke(
+                    "analyze_audio",
+                    {
+                        path:
+                            state.audioPath,
+
+                        chordDict:
+                            "submission"
+                    }
+                );
+        }
 
         console.log(
             "Analysis result:",
@@ -677,8 +1251,14 @@ async function analyzeAudio() {
 // }
 
 async function togglePlayback() {
-    if (!state.audioPath) {
-        console.error("No audio path");
+
+    /*
+     * Playback depends on whether the audio
+     * element has a source, not whether that
+     * source came from a local filesystem path.
+     */
+    if (!audio.getAttribute("src")) {
+        console.error("No audio loaded");
         return;
     }
 
@@ -690,12 +1270,23 @@ async function togglePlayback() {
 
     if (audio.paused) {
         try {
+
             await audio.play();
-            console.log("Playback started");
+
+            console.log(
+                "Playback started"
+            );
+
         } catch (error) {
-            console.error("PLAYBACK FAILED:", error);
+
+            console.error(
+                "PLAYBACK FAILED:",
+                error
+            );
         }
+
     } else {
+
         audio.pause();
     }
 }
@@ -830,7 +1421,7 @@ requestAnimationFrame(
 
 loadButton.addEventListener(
     "click",
-    loadAudio
+    openAudioLibrary
 );
 
 analyzeButton.addEventListener(
@@ -877,6 +1468,7 @@ export async function loadRecordedAnalysis(
 
 
     state.audioPath = null;
+    state.uploadedFileName = null;
 
     state.audioName =
         "Recorded Session";
@@ -974,6 +1566,163 @@ export async function loadRecordedAnalysis(
     updateChordDisplay();
     updatePlayerUI();
 }
+
+document.addEventListener(
+    "keydown",
+    event => {
+
+        if (!libraryState.open) {
+            return;
+        }
+
+
+        /*
+         * Prevent the normal M shortcut
+         * from switching modes while the
+         * library is open.
+         */
+        if (
+            event.key
+                .toLowerCase() === "m"
+        ) {
+
+            event.stopPropagation();
+
+            return;
+        }
+
+
+        if (
+            event.key ===
+            "ArrowDown"
+        ) {
+
+            event.preventDefault();
+            event.stopPropagation();
+
+
+            selectLibrarySong(
+                libraryState.selectedIndex +
+                1
+            );
+
+            return;
+        }
+
+
+        if (
+            event.key ===
+            "ArrowUp"
+        ) {
+
+            event.preventDefault();
+            event.stopPropagation();
+
+
+            selectLibrarySong(
+                libraryState.selectedIndex -
+                1
+            );
+
+            return;
+        }
+
+
+        if (
+            event.key ===
+            "Escape"
+        ) {
+
+            event.preventDefault();
+            event.stopPropagation();
+
+
+            closeAudioLibrary();
+
+            return;
+        }
+
+
+        if (
+            event.key ===
+            "Enter"
+        ) {
+
+            /*
+             * Let normal footer buttons
+             * keep their normal Enter
+             * behavior.
+             */
+            if (
+                document.activeElement ===
+                    browseLocalAudioButton ||
+                document.activeElement ===
+                    closeAudioLibraryButton ||
+                document.activeElement ===
+                    cancelAudioLibraryButton ||
+                document.activeElement ===
+                    loadLibrarySongButton
+            ) {
+                return;
+            }
+
+
+            event.preventDefault();
+            event.stopPropagation();
+
+
+            loadSelectedLibrarySong();
+        }
+
+    },
+    true
+);
+
+closeAudioLibraryButton.addEventListener(
+    "click",
+    closeAudioLibrary
+);
+
+
+cancelAudioLibraryButton.addEventListener(
+    "click",
+    closeAudioLibrary
+);
+
+
+loadLibrarySongButton.addEventListener(
+    "click",
+    loadSelectedLibrarySong
+);
+
+
+browseLocalAudioButton.addEventListener(
+    "click",
+    async () => {
+
+        closeAudioLibrary();
+
+        await browseLocalAudio();
+    }
+);
+
+
+audioLibraryModal.addEventListener(
+    "click",
+    event => {
+
+        /*
+         * Click dark background outside
+         * dialog to close.
+         */
+        if (
+            event.target ===
+            audioLibraryModal
+        ) {
+            closeAudioLibrary();
+        }
+    }
+);
 
 
 // old function for checking backend connection

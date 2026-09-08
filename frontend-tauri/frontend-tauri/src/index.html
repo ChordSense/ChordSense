@@ -57,7 +57,7 @@
         <section class="toolbar">
 
             <button id="load-audio">
-                Load Audio
+                Browse Tracks
             </button>
 
             <button id="analyze">
@@ -279,6 +279,113 @@
 
     <!-- actual audio engine -->
     <audio id="audio-player"></audio>
+
+    <!-- CHORDSENSE AUDIO LIBRARY -->
+    <div
+        id="audio-library-modal"
+        class="audio-library-modal hidden"
+        aria-hidden="true"
+    >
+        <section
+            class="audio-library-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="audio-library-title"
+        >
+
+            <header class="audio-library-header">
+
+                <div>
+                    <p class="audio-library-eyebrow">
+                        CHORDSENSE
+                    </p>
+
+                    <h2 id="audio-library-title">
+                        Audio Library
+                    </h2>
+
+                    <p class="audio-library-subtitle">
+                        Select a song uploaded to ChordSense.
+                    </p>
+                </div>
+
+                <button
+                    id="close-audio-library"
+                    class="audio-library-close"
+                    type="button"
+                    aria-label="Close audio library"
+                >
+                    ×
+                </button>
+
+            </header>
+
+
+            <div class="audio-library-shortcuts">
+                <span>↑ ↓ Navigate</span>
+                <span>Enter Select</span>
+                <span>Esc Close</span>
+            </div>
+
+
+            <div
+                id="audio-library-list"
+                class="audio-library-list"
+                role="listbox"
+                tabindex="0"
+                aria-label="Uploaded songs"
+            ></div>
+
+
+            <div
+                id="audio-library-empty"
+                class="audio-library-empty hidden"
+            >
+                No songs have been uploaded yet.
+            </div>
+
+
+            <p
+                id="audio-library-status"
+                class="audio-library-status"
+            ></p>
+
+
+            <footer class="audio-library-actions">
+
+                <button
+                    id="browse-local-audio"
+                    class="library-button secondary"
+                    type="button"
+                >
+                    Browse This Device
+                </button>
+
+                <div class="audio-library-actions-right">
+
+                    <button
+                        id="cancel-audio-library"
+                        class="library-button secondary"
+                        type="button"
+                    >
+                        Cancel
+                    </button>
+
+                    <button
+                        id="load-library-song"
+                        class="library-button primary"
+                        type="button"
+                        disabled
+                    >
+                        Load Selected
+                    </button>
+
+                </div>
+
+            </footer>
+
+        </section>
+    </div>
 
 </main>
 
