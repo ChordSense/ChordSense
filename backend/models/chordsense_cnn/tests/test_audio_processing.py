@@ -10,6 +10,7 @@ from models.chordsense_cnn.audio_processing import (
     AudioBuffer,
     DEFAULT_PREPROCESSING_CONFIG,
     create_feature_windows,
+    feature_window_sample_span,
     load_audio_file,
     load_dataset_audio,
     preprocess_audio,
@@ -111,6 +112,34 @@ class AudioProcessingTests(unittest.TestCase):
         np.testing.assert_array_equal(batch.start_frames, [0, 1, 2])
         np.testing.assert_array_equal(batch.center_frames, [1, 2, 3])
         np.testing.assert_array_equal(batch.end_frames, [3, 4, 5])
+
+    def test_causal_stft_window_span_includes_fft_tail(self):
+        config = replace(
+            DEFAULT_PREPROCESSING_CONFIG,
+            feature_type="chroma_stft",
+            context_frames=4,
+            hop_length=512,
+            stft_n_fft=1024,
+        )
+
+        self.assertEqual(feature_window_sample_span(config), 2560)
+
+    def test_causal_stft_pipeline_produces_finite_chroma(self):
+        config = replace(
+            DEFAULT_PREPROCESSING_CONFIG,
+            feature_type="chroma_stft",
+            use_harmonic=False,
+            stft_n_fft=1024,
+            hop_length=256,
+            tuning=0.0,
+        )
+        samples = synthesize_chord(config.sample_rate, 0.2)
+
+        processed = preprocess_audio(AudioBuffer(samples, config.sample_rate), config)
+
+        expected_frames = 1 + (samples.size - config.stft_n_fft) // config.hop_length
+        self.assertEqual(processed.chroma.shape, (config.n_chroma, expected_frames))
+        self.assertTrue(np.isfinite(processed.chroma).all())
 
     def test_short_chroma_is_padded_once(self):
         config = replace(DEFAULT_PREPROCESSING_CONFIG, context_frames=5)
