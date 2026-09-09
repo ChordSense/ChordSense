@@ -1,6 +1,6 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import librosa
 import numpy as np
@@ -36,6 +36,7 @@ class AudioBuffer:
 @dataclass(frozen=True)
 class PreprocessingConfig:
     version: str = "chroma-cqt-v1"
+    feature_type: Literal["chroma_cqt", "chroma_stft"] = "chroma_cqt"
     sample_rate: int = 22_050
     hop_length: int = 512
     context_frames: int = 15
@@ -45,6 +46,11 @@ class PreprocessingConfig:
     n_chroma: int = 12
     bins_per_octave: int = 12
     n_octaves: int = 7
+    stft_n_fft: int = 2048
+    # ``None`` preserves the shipped CQT pipeline's global tuning estimate.
+    # Causal STFT experiments set this to 0.0 because a whole-buffer estimate
+    # is unavailable online.
+    tuning: float | None = None
 
     def __post_init__(self) -> None:
         positive_values = {
@@ -56,14 +62,27 @@ class PreprocessingConfig:
             "n_chroma": self.n_chroma,
             "bins_per_octave": self.bins_per_octave,
             "n_octaves": self.n_octaves,
+            "stft_n_fft": self.stft_n_fft,
         }
         invalid = [name for name, value in positive_values.items() if value <= 0]
         if invalid:
             names = ", ".join(invalid)
             raise ValueError(f"Preprocessing values must be positive: {names}")
+        if self.feature_type not in {"chroma_cqt", "chroma_stft"}:
+            raise ValueError(f"Unsupported feature_type: {self.feature_type}")
+        if self.tuning is not None and not np.isfinite(self.tuning):
+            raise ValueError("tuning must be finite")
 
 
 DEFAULT_PREPROCESSING_CONFIG = PreprocessingConfig()
+
+
+def feature_window_sample_span(config: PreprocessingConfig) -> int:
+    """Return the source-sample span represented by one feature window."""
+    if config.feature_type == "chroma_stft":
+        return config.stft_n_fft + (config.context_frames - 1) * config.hop_length
+    # Preserve the shipped CQT labeler's historical window convention.
+    return config.context_frames * config.hop_length
 
 
 @dataclass(frozen=True)
@@ -121,17 +140,36 @@ def preprocess_audio(
         if config.use_harmonic
         else waveform.samples.copy()
     )
-    chroma = librosa.feature.chroma_cqt(
-        y=analysis_waveform,
-        sr=config.sample_rate,
-        hop_length=config.hop_length,
-        fmin=config.fmin_hz,
-        n_chroma=config.n_chroma,
-        bins_per_octave=config.bins_per_octave,
-        n_octaves=config.n_octaves,
-        norm=np.inf,
-        threshold=0.0,
-    )
+    if config.feature_type == "chroma_cqt":
+        chroma = librosa.feature.chroma_cqt(
+            y=analysis_waveform,
+            sr=config.sample_rate,
+            hop_length=config.hop_length,
+            fmin=config.fmin_hz,
+            n_chroma=config.n_chroma,
+            bins_per_octave=config.bins_per_octave,
+            n_octaves=config.n_octaves,
+            tuning=config.tuning,
+            norm=np.inf,
+            threshold=0.0,
+        )
+    else:
+        minimum_samples = config.stft_n_fft
+        if len(analysis_waveform) < minimum_samples:
+            analysis_waveform = np.pad(
+                analysis_waveform,
+                (0, minimum_samples - len(analysis_waveform)),
+            )
+        chroma = librosa.feature.chroma_stft(
+            y=analysis_waveform,
+            sr=config.sample_rate,
+            n_fft=config.stft_n_fft,
+            hop_length=config.hop_length,
+            n_chroma=config.n_chroma,
+            center=False,
+            tuning=config.tuning,
+            norm=np.inf,
+        )
     return PreprocessedAudio(
         waveform=waveform,
         analysis_waveform=np.ascontiguousarray(analysis_waveform, dtype=np.float32),
