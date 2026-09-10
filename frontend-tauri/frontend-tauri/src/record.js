@@ -5,6 +5,7 @@ const { invoke } =
 const RecordState = {
     IDLE: "idle",
     COUNTDOWN: "countdown",
+    STARTING: "starting",
     RECORDING: "recording",
     PROCESSING: "processing"
 };
@@ -88,11 +89,10 @@ export function initRecordMode({
             recordState !==
             RecordState.IDLE;
 
-        stopButton.disabled =
-            recordState ===
-                RecordState.IDLE ||
-            recordState ===
-                RecordState.PROCESSING;
+        stopButton.disabled = ![
+            RecordState.COUNTDOWN,
+            RecordState.RECORDING
+        ].includes(recordState);
     }
 
 
@@ -133,6 +133,8 @@ export function initRecordMode({
 
     function setIdle() {
 
+        stopAnimationLoop();
+
         recordState =
             RecordState.IDLE;
 
@@ -146,6 +148,9 @@ export function initRecordMode({
         timer.classList.add(
             "hidden"
         );
+
+        timer.textContent =
+            "00:00";
 
         indicator.classList.remove(
             "recording"
@@ -204,18 +209,36 @@ export function initRecordMode({
         updateButtons();
         updateModeLock();
 
-        updateLoop();
+        scheduleUpdateLoop();
     }
 
 
     async function beginRecording() {
 
-        if (beginRecordingCalled) {
+        if (
+            beginRecordingCalled ||
+            recordState !== RecordState.COUNTDOWN
+        ) {
             return;
         }
 
         beginRecordingCalled =
             true;
+
+        recordState =
+            RecordState.STARTING;
+
+        countdown.classList.add(
+            "hidden"
+        );
+
+        recordTitle.textContent =
+            "Starting Recording";
+
+        recordDetail.textContent =
+            "Connecting to the microphone...";
+
+        updateButtons();
 
         try {
 
@@ -227,11 +250,6 @@ export function initRecordMode({
                 await invoke(
                     "begin_recording"
                 );
-
-            console.log(
-                "Begin recording:",
-                result
-            );
 
             recordState =
                 RecordState.RECORDING;
@@ -266,17 +284,24 @@ export function initRecordMode({
             );
 
             updateButtons();
+            scheduleUpdateLoop();
 
         } catch (error) {
 
             console.error(error);
 
+            setIdle();
+
+            recordTitle.textContent =
+                "Microphone Unavailable";
+
+            recordDetail.textContent =
+                "Check the recording service, then try again.";
+
             setStatus(
                 `Could not start recording: ${error}`,
                 true
             );
-
-            setIdle();
         }
     }
 
@@ -291,9 +316,7 @@ export function initRecordMode({
             RecordState.COUNTDOWN
         ) {
 
-            cancelAnimationFrame(
-                animationFrame
-            );
+            stopAnimationLoop();
 
             setStatus(
                 "Recording cancelled."
@@ -316,9 +339,7 @@ export function initRecordMode({
         recordState =
             RecordState.PROCESSING;
 
-        cancelAnimationFrame(
-            animationFrame
-        );
+        stopAnimationLoop();
 
         indicator.classList.remove(
             "recording"
@@ -344,11 +365,6 @@ export function initRecordMode({
                     "end_recording"
                 );
 
-            console.log(
-                "Recorded analysis:",
-                result
-            );
-
             setStatus(
                 `Analysis complete. ${
                     result.chords?.length ?? 0
@@ -365,6 +381,8 @@ export function initRecordMode({
 
             console.error(error);
 
+            setIdle();
+
             recordTitle.textContent =
                 "Recording Failed";
 
@@ -375,13 +393,40 @@ export function initRecordMode({
                 `Recording failed: ${error}`,
                 true
             );
-
-            setIdle();
         }
     }
 
 
+    function stopAnimationLoop() {
+
+        if (animationFrame === null) {
+            return;
+        }
+
+        cancelAnimationFrame(
+            animationFrame
+        );
+
+        animationFrame = null;
+    }
+
+
+    function scheduleUpdateLoop() {
+
+        if (animationFrame !== null) {
+            return;
+        }
+
+        animationFrame =
+            requestAnimationFrame(
+                updateLoop
+            );
+    }
+
+
     function updateLoop() {
+
+        animationFrame = null;
 
         if (
             recordState ===
@@ -451,10 +496,7 @@ export function initRecordMode({
                 RecordState.RECORDING
         ) {
 
-            animationFrame =
-                requestAnimationFrame(
-                    updateLoop
-                );
+            scheduleUpdateLoop();
         }
     }
 

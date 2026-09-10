@@ -28,6 +28,8 @@ let currentMode = "play";
 
 let isModeTransitioning = false;
 
+let isRecordingLocked = false;
+
 function wait(milliseconds) {
     return new Promise(
         resolve =>
@@ -61,6 +63,16 @@ async function updateHeader(mode) {
         mode === "record"
     );
 
+    playModeButton.setAttribute(
+        "aria-pressed",
+        String(mode === "play")
+    );
+
+    recordModeButton.setAttribute(
+        "aria-pressed",
+        String(mode === "record")
+    );
+
     modeTitle.classList.remove(
         "header-leaving"
     );
@@ -82,7 +94,11 @@ async function showMode(mode) {
 
     if (
         mode === currentMode ||
-        isModeTransitioning
+        isModeTransitioning ||
+        (
+            mode === "play" &&
+            isRecordingLocked
+        )
     ) {
         return;
     }
@@ -187,6 +203,8 @@ initRecordMode({
     },
 
     onRecordingLockChanged(locked) {
+
+        isRecordingLocked = locked;
 
         /*
          * Prevent accidentally leaving Record Mode

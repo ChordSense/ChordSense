@@ -27,10 +27,12 @@
             Mode: Play Along
         </h1>
 
-        <nav class="mode-switcher">
+        <nav class="mode-switcher" aria-label="Application mode">
             <button
                 id="play-mode-button"
                 class="mode-tab active"
+                type="button"
+                aria-pressed="true"
             >
                 Play Along
             </button>
@@ -38,6 +40,8 @@
             <button
                 id="record-mode-button"
                 class="mode-tab"
+                type="button"
+                aria-pressed="false"
             >
                 Record
             </button>
@@ -56,11 +60,11 @@
         <!-- LOAD / ANALYZE -->
         <section class="toolbar">
 
-            <button id="load-audio">
+            <button id="load-audio" type="button">
                 Browse Tracks
             </button>
 
-            <button id="analyze">
+            <button id="analyze" type="button" disabled>
                 Analyze
             </button>
 
@@ -79,7 +83,7 @@
 
         </section>
 
-        <p id="status"></p>
+        <p id="status" role="status" aria-live="polite"></p>
 
         <!-- NOW PLAYING -->
         <section class="now-playing">
@@ -104,6 +108,8 @@
                 id="stop"
                 class="icon-button"
                 aria-label="Stop"
+                type="button"
+                disabled
             >
                 <img src="assets/icons/back.png" alt="" />
             </button>
@@ -112,6 +118,8 @@
                 id="play-pause"
                 class="icon-button"
                 aria-label="Play"
+                type="button"
+                disabled
             >
                 <img
                     id="play-pause-image"
@@ -129,6 +137,7 @@
                     max="0"
                     step="0.01"
                     value="0"
+                    disabled
                 />
 
                 <span id="time-display">
@@ -238,7 +247,7 @@
     <section id="record-mode" class="mode-view hidden">
         <div class="record-container">
             <div class="record-panel">
-                <div id="record-indicator" class="record-indicator"></div>
+                <div id="record-indicator" class="record-indicator" aria-hidden="true"></div>
                 <p class="record-eyebrow">
                     LIVE INPUT
                 </p>
@@ -258,18 +267,18 @@
 
             <div class="record-controls">
 
-                <button id="start-recording" class="record-button primary">
+                <button id="start-recording" class="record-button primary" type="button">
                     Start Recording
                 </button>
 
-                <button id="stop-recording" class="record-button secondary" disabled>
+                <button id="stop-recording" class="record-button secondary" type="button" disabled>
                     Stop Recording
                 </button>
 
             </div>
 
 
-            <p id="record-status" class="record-status">
+            <p id="record-status" class="record-status" role="status" aria-live="polite">
                 Ready to record.
             </p>
 
@@ -348,6 +357,8 @@
             <p
                 id="audio-library-status"
                 class="audio-library-status"
+                role="status"
+                aria-live="polite"
             ></p>
 
 
