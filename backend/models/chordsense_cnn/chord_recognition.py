@@ -5,10 +5,10 @@ import time
 
 import numpy as np
 import numpy.typing as npt
-import torch
 
 from .audio_processing import (
     AudioBuffer,
+    DEFAULT_PREPROCESSING_CONFIG,
     PreprocessedAudio,
     PreprocessingConfig,
     create_feature_windows,
@@ -21,7 +21,7 @@ from .config import (
     RECORDING_OUTPUT_FILE,
     VOTE_WINDOW,
 )
-from .model import build_model
+from .inference_backends import HailoInferenceBackend
 from .smoother import (
     PredictionResult,
     causal_smooth_predictions,
@@ -69,6 +69,11 @@ class ChordRecognizer:
             raise ValueError("confidence_threshold must be between 0 and 1")
         self.confidence_threshold = confidence_threshold
         self.causal_smoothing = causal_smoothing
+        import torch
+
+        from .model import build_model
+
+        self._torch = torch
         self.device = self._select_device()
         checkpoint = torch.load(checkpoint_path, weights_only=True, map_location=self.device)
         checkpoint_preprocessing = checkpoint.get("preprocessing")
@@ -88,6 +93,8 @@ class ChordRecognizer:
 
     @staticmethod
     def _select_device() -> str:
+        import torch
+
         if torch.cuda.is_available():
             return "cuda"
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -163,12 +170,11 @@ class ChordRecognizer:
         duration_seconds: float,
     ) -> RecognitionResult:
         window_batch = create_feature_windows(chroma, self.preprocessing)
-        features = torch.from_numpy(window_batch.values).unsqueeze(1).to(self.device)
-        with torch.inference_mode():
-            probabilities = torch.softmax(
-                self.model(features) / self.temperature,
-                dim=1,
-            ).cpu().numpy()
+        logits = self._infer_logits(window_batch.values)
+        scaled_logits = logits / self.temperature
+        scaled_logits -= scaled_logits.max(axis=1, keepdims=True)
+        exponentials = np.exp(scaled_logits)
+        probabilities = exponentials / exponentials.sum(axis=1, keepdims=True)
 
         frame_probabilities = self._align_window_probabilities(
             probabilities,
@@ -212,6 +218,12 @@ class ChordRecognizer:
             duration_seconds=duration_seconds,
             processing_seconds=0.0,
         )
+
+    def _infer_logits(self, windows: FloatArray) -> FloatArray:
+        features = self._torch.from_numpy(windows).unsqueeze(1).to(self.device)
+        with self._torch.inference_mode():
+            logits = self.model(features).detach().cpu().numpy()
+        return np.ascontiguousarray(logits, dtype=np.float32)
 
     @staticmethod
     def _align_window_probabilities(
@@ -349,6 +361,47 @@ class ChordRecognizer:
             else:
                 merged.append(segment)
         return merged
+
+
+class HailoChordRecognizer(ChordRecognizer):
+    """Run the non-causal whole-recording pipeline with HEF inference."""
+
+    def __init__(
+        self,
+        hef_path: str | Path,
+        preprocessing: PreprocessingConfig = DEFAULT_PREPROCESSING_CONFIG,
+        confidence_threshold: float = 0.0,
+        temperature: float = 1.0,
+    ):
+        if not 0.0 <= confidence_threshold <= 1.0:
+            raise ValueError("confidence_threshold must be between 0 and 1")
+        if temperature <= 0:
+            raise ValueError("temperature must be positive")
+        self.confidence_threshold = confidence_threshold
+        self.causal_smoothing = False
+        self.preprocessing = preprocessing
+        self.temperature = temperature
+        self.label_names = CHORD_CLASSES
+        self.backend = HailoInferenceBackend(
+            hef_path,
+            input_shape=(
+                1,
+                1,
+                preprocessing.n_chroma,
+                preprocessing.context_frames,
+            ),
+            class_count=NUM_CLASSES,
+        )
+
+    def _infer_logits(self, windows: FloatArray) -> FloatArray:
+        features = np.ascontiguousarray(windows[:, None, :, :], dtype=np.float32)
+        logits = np.empty((len(features), NUM_CLASSES), dtype=np.float32)
+        for index, feature_window in enumerate(features):
+            logits[index] = self.backend.infer(feature_window[None, ...])[0]
+        return logits
+
+    def close(self) -> None:
+        self.backend.close()
 
 
 def main() -> int:
