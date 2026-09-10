@@ -2,6 +2,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 import sys
 import time
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -18,6 +19,8 @@ from .audio_processing import (
 from .config import (
     CHORD_CLASSES,
     NUM_CLASSES,
+    POST_ONSET_LENGTH,
+    POST_ONSET_OFFSET,
     RECORDING_OUTPUT_FILE,
     VOTE_WINDOW,
 )
@@ -32,6 +35,61 @@ from .smoother import (
 MODEL_DIR = Path(__file__).resolve().parent
 DEFAULT_CHECKPOINT = MODEL_DIR / "checkpoints" / "latest_chord_cnn.pth"
 FloatArray = npt.NDArray[np.float32]
+
+
+@dataclass(frozen=True)
+class PostprocessingConfig:
+    """Select smoothing and segmentation independently of model inference."""
+
+    smoothing_mode: Literal["centered", "causal"]
+    segmentation_mode: Literal["onset", "framewise"]
+    vote_window: int
+    minimum_chord_duration: float
+    fill_internal_noise: bool
+    onset_decision_offset: int
+    onset_decision_window: int
+
+    def __post_init__(self) -> None:
+        if self.smoothing_mode not in {"centered", "causal"}:
+            raise ValueError(f"Unsupported smoothing mode: {self.smoothing_mode}")
+        if self.segmentation_mode not in {"onset", "framewise"}:
+            raise ValueError(f"Unsupported segmentation mode: {self.segmentation_mode}")
+        if self.vote_window <= 0:
+            raise ValueError("vote_window must be positive")
+        if self.smoothing_mode == "centered" and self.vote_window % 2 == 0:
+            raise ValueError("centered smoothing requires an odd vote_window")
+        if self.minimum_chord_duration < 0:
+            raise ValueError("minimum_chord_duration cannot be negative")
+        if self.onset_decision_offset < 0:
+            raise ValueError("onset_decision_offset cannot be negative")
+        if self.onset_decision_window <= 0:
+            raise ValueError("onset_decision_window must be positive")
+
+
+OFFLINE_POSTPROCESSING = PostprocessingConfig(
+    smoothing_mode="centered",
+    segmentation_mode="onset",
+    vote_window=VOTE_WINDOW,
+    minimum_chord_duration=0.4,
+    fill_internal_noise=True,
+    # Main indexed each prediction by its window start. Predictions are now
+    # correctly aligned to the window center, so retain main's effective
+    # post-onset decision point by adding half the context window.
+    onset_decision_offset=(
+        POST_ONSET_OFFSET + DEFAULT_PREPROCESSING_CONFIG.context_frames // 2
+    ),
+    onset_decision_window=POST_ONSET_LENGTH,
+)
+
+LIVE_POSTPROCESSING = PostprocessingConfig(
+    smoothing_mode="causal",
+    segmentation_mode="framewise",
+    vote_window=3,
+    minimum_chord_duration=0.0,
+    fill_internal_noise=False,
+    onset_decision_offset=0,
+    onset_decision_window=1,
+)
 
 
 @dataclass
@@ -63,12 +121,12 @@ class ChordRecognizer:
         checkpoint_path: str | Path,
         preprocessing: PreprocessingConfig | None = None,
         confidence_threshold: float = 0.0,
-        causal_smoothing: bool = False,
+        postprocessing: PostprocessingConfig = OFFLINE_POSTPROCESSING,
     ):
         if not 0.0 <= confidence_threshold <= 1.0:
             raise ValueError("confidence_threshold must be between 0 and 1")
         self.confidence_threshold = confidence_threshold
-        self.causal_smoothing = causal_smoothing
+        self.postprocessing = postprocessing
         import torch
 
         from .model import build_model
@@ -185,11 +243,16 @@ class ChordRecognizer:
         confidence = np.asarray(frame_probabilities.max(axis=1), dtype=np.float32)
         noise_index = CHORD_CLASSES.index("Noise")
         predictions[confidence < self.confidence_threshold] = noise_index
-        smoothed = (
-            causal_smooth_predictions(predictions, vote_window=3)
-            if self.causal_smoothing
-            else smooth_predictions(predictions, vote_window=VOTE_WINDOW)
-        )
+        if self.postprocessing.smoothing_mode == "causal":
+            smoothed = causal_smooth_predictions(
+                predictions,
+                vote_window=self.postprocessing.vote_window,
+            )
+        else:
+            smoothed = smooth_predictions(
+                predictions,
+                vote_window=self.postprocessing.vote_window,
+            )
         selected_confidence = np.asarray(
             frame_probabilities[np.arange(len(smoothed)), smoothed],
             dtype=np.float32,
@@ -199,8 +262,16 @@ class ChordRecognizer:
             analysis_waveform,
             self.preprocessing,
             selected_confidence,
+            segmentation_mode=self.postprocessing.segmentation_mode,
+            onset_decision_offset=self.postprocessing.onset_decision_offset,
+            onset_decision_window=self.postprocessing.onset_decision_window,
         )
-        segments = self.normalize_segments(model_predictions, duration_seconds)
+        segments = self.normalize_segments(
+            model_predictions,
+            duration_seconds,
+            min_duration=self.postprocessing.minimum_chord_duration,
+            fill_internal_noise=self.postprocessing.fill_internal_noise,
+        )
         return RecognitionResult(
             segments=[
                 RecognitionSegment(
@@ -249,7 +320,8 @@ class ChordRecognizer:
         model_predictions: PredictionResult,
         output_path: str | Path = RECORDING_OUTPUT_FILE,
         duration_seconds: float | None = None,
-        min_duration: float = 0.0,
+        min_duration: float | None = None,
+        fill_internal_noise: bool | None = None,
     ) -> bool:
         if duration_seconds is None:
             duration_seconds = (
@@ -257,10 +329,15 @@ class ChordRecognizer:
                 * self.preprocessing.hop_length
                 / self.preprocessing.sample_rate
             )
+        if min_duration is None:
+            min_duration = self.postprocessing.minimum_chord_duration
+        if fill_internal_noise is None:
+            fill_internal_noise = self.postprocessing.fill_internal_noise
         segments = self.normalize_segments(
             model_predictions,
             duration_seconds,
             min_duration,
+            fill_internal_noise,
         )
         noise_index = CHORD_CLASSES.index("Noise")
         result = RecognitionResult(
@@ -283,6 +360,7 @@ class ChordRecognizer:
         model_predictions: PredictionResult,
         duration_seconds: float,
         min_duration: float = 0.0,
+        fill_internal_noise: bool = False,
     ) -> list[NormalizedSegment]:
         if duration_seconds <= 0:
             raise ValueError("duration_seconds must be positive")
@@ -295,29 +373,63 @@ class ChordRecognizer:
         frame_seconds = self.preprocessing.hop_length / self.preprocessing.sample_rate
         normalized = []
         for index, (start, end, label) in enumerate(raw_segments):
+            segment_start = min(duration_seconds, start * frame_seconds)
             segment_end = (
                 duration_seconds
                 if index == len(raw_segments) - 1
                 else min(duration_seconds, end * frame_seconds)
             )
+            if segment_end <= segment_start:
+                continue
             normalized.append(
                 NormalizedSegment(
-                    start=min(duration_seconds, start * frame_seconds),
+                    start=segment_start,
                     end=segment_end,
                     label=label,
                     confidence=float(np.mean(confidences[start:end])),
                 )
             )
+        if not normalized:
+            return []
 
-        # Never absorb Noise/rest segments. Optional minimum-duration cleanup
-        # applies only to chord blips and is disabled by default.
         noise_index = CHORD_CLASSES.index("Noise")
+        if fill_internal_noise:
+            first_chord = next(
+                (index for index, segment in enumerate(normalized) if segment.label != noise_index),
+                None,
+            )
+            last_chord = next(
+                (
+                    index
+                    for index in range(len(normalized) - 1, -1, -1)
+                    if normalized[index].label != noise_index
+                ),
+                None,
+            )
+            if first_chord is None:
+                normalized = [
+                    NormalizedSegment(
+                        normalized[0].start,
+                        normalized[-1].end,
+                        noise_index,
+                        float(np.mean(confidences)),
+                    )
+                ]
+            else:
+                assert last_chord is not None
+                for index in range(first_chord + 1, last_chord):
+                    if normalized[index].label == noise_index:
+                        normalized[index].label = normalized[index - 1].label
+
         normalized = self._merge_adjacent(normalized)
         changed = True
         while min_duration > 0 and changed and len(normalized) > 1:
             changed = False
             for index, segment in enumerate(normalized):
-                if segment.label == noise_index or segment.end - segment.start >= min_duration:
+                edge_noise = segment.label == noise_index and (
+                    index == 0 or index == len(normalized) - 1
+                )
+                if edge_noise or segment.end - segment.start >= min_duration:
                     continue
                 if index > 0:
                     normalized[index - 1].end = segment.end
@@ -372,13 +484,14 @@ class HailoChordRecognizer(ChordRecognizer):
         preprocessing: PreprocessingConfig = DEFAULT_PREPROCESSING_CONFIG,
         confidence_threshold: float = 0.0,
         temperature: float = 1.0,
+        postprocessing: PostprocessingConfig = OFFLINE_POSTPROCESSING,
     ):
         if not 0.0 <= confidence_threshold <= 1.0:
             raise ValueError("confidence_threshold must be between 0 and 1")
         if temperature <= 0:
             raise ValueError("temperature must be positive")
         self.confidence_threshold = confidence_threshold
-        self.causal_smoothing = False
+        self.postprocessing = postprocessing
         self.preprocessing = preprocessing
         self.temperature = temperature
         self.label_names = CHORD_CLASSES

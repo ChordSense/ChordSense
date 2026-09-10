@@ -40,9 +40,15 @@ recording_recognizer = None
 def get_recording_recognizer():
     global recording_recognizer
     if recording_recognizer is None:
-        from models.chordsense_cnn.chord_recognition import HailoChordRecognizer
+        from models.chordsense_cnn.chord_recognition import (
+            HailoChordRecognizer,
+            OFFLINE_POSTPROCESSING,
+        )
 
-        recording_recognizer = HailoChordRecognizer(CUSTOM_MODEL_HEF)
+        recording_recognizer = HailoChordRecognizer(
+            CUSTOM_MODEL_HEF,
+            postprocessing=OFFLINE_POSTPROCESSING,
+        )
     return recording_recognizer
 
 

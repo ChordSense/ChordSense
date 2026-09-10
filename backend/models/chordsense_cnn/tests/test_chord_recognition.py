@@ -7,6 +7,7 @@ import numpy as np
 from models.chordsense_cnn.audio_processing import DEFAULT_PREPROCESSING_CONFIG
 from models.chordsense_cnn.chord_recognition import (
     ChordRecognizer,
+    LIVE_POSTPROCESSING,
     RecognitionResult,
     RecognitionSegment,
 )
@@ -18,6 +19,7 @@ def recognizer_without_model() -> ChordRecognizer:
     recognizer = ChordRecognizer.__new__(ChordRecognizer)
     recognizer.preprocessing = DEFAULT_PREPROCESSING_CONFIG
     recognizer.label_names = CHORD_CLASSES
+    recognizer.postprocessing = LIVE_POSTPROCESSING
     return recognizer
 
 
