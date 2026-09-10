@@ -166,65 +166,47 @@ class HailoInferenceBackend:
         self._resources = ExitStack()
 
         try:
-            hef = hailo_module.HEF(str(path))
             device = self._resources.enter_context(hailo_module.VDevice())
-            configure_params = hailo_module.ConfigureParams.create_from_hef(
-                hef=hef,
-                interface=hailo_module.HailoStreamInterface.PCIe,
-            )
-            network_groups = device.configure(hef, configure_params)
-            if len(network_groups) != 1:
-                raise ValueError(
-                    "The HEF must contain exactly one Hailo network group; "
-                    f"found {len(network_groups)}"
-                )
-            network_group = network_groups[0]
-            activation_params = network_group.create_params()
-            input_params = hailo_module.InputVStreamParams.make(
-                network_group,
-                quantized=False,
-                format_type=hailo_module.FormatType.FLOAT32,
-            )
-            output_params = hailo_module.OutputVStreamParams.make(
-                network_group,
-                quantized=False,
-                format_type=hailo_module.FormatType.FLOAT32,
-            )
-            input_infos = hef.get_input_vstream_infos()
-            output_infos = hef.get_output_vstream_infos()
-            if len(input_infos) != 1 or len(output_infos) != 1:
+            infer_model = device.create_infer_model(str(path))
+            if len(infer_model.input_names) != 1 or len(infer_model.output_names) != 1:
                 raise ValueError(
                     "The HEF must expose exactly one input and one output stream"
                 )
+
+            input_stream = infer_model.input()
+            output_stream = infer_model.output()
 
             expected_hwc = (
                 input_shape[2],
                 input_shape[3],
                 input_shape[1],
             )
-            actual_hwc = _hailo_shape(input_infos[0].shape)
+            actual_hwc = _hailo_shape(input_stream.shape)
             if actual_hwc != expected_hwc:
                 raise ValueError(
                     "HEF input shape does not match streaming features: "
                     f"expected NHWC data with per-item shape {expected_hwc}, "
                     f"got {actual_hwc}"
                 )
-            output_size = int(np.prod(_hailo_shape(output_infos[0].shape)))
+            output_shape = _hailo_shape(output_stream.shape)
+            output_size = int(np.prod(output_shape))
             if output_size != class_count:
                 raise ValueError(
                     f"HEF output has {output_size} values; expected {class_count}"
                 )
 
-            self._input_name = input_infos[0].name
-            self._output_name = output_infos[0].name
-            self._pipeline = self._resources.enter_context(
-                hailo_module.InferVStreams(
-                    network_group,
-                    input_params,
-                    output_params,
-                )
+            input_stream.set_format_type(hailo_module.FormatType.FLOAT32)
+            output_stream.set_format_type(hailo_module.FormatType.FLOAT32)
+            infer_model.set_batch_size(1)
+            self._configured_model = self._resources.enter_context(
+                infer_model.configure()
             )
-            self._resources.enter_context(network_group.activate(activation_params))
+            self._hailo_input = np.empty(expected_hwc, dtype=np.float32)
+            self._hailo_output = np.empty(output_shape, dtype=np.float32)
+            self._bindings = self._configured_model.create_bindings(
+                input_buffers={infer_model.input_names[0]: self._hailo_input},
+                output_buffers={infer_model.output_names[0]: self._hailo_output},
+            )
         except Exception:
             self._resources.close()
             raise
@@ -246,14 +228,10 @@ class HailoInferenceBackend:
             raise RuntimeError("Hailo inference backend is closed")
         values = _validate_features(features, self.input_shape)
         # ChordSense builds NCHW windows; Hailo vstreams consume NHWC buffers.
-        hailo_input = np.ascontiguousarray(values.transpose(0, 2, 3, 1))
-        outputs = self._pipeline.infer({self._input_name: hailo_input})
-        if self._output_name not in outputs:
-            raise ValueError(
-                f"Hailo output did not contain stream {self._output_name!r}"
-            )
+        self._hailo_input[...] = values[0].transpose(1, 2, 0)
+        self._configured_model.run([self._bindings], 10_000)
         return _validate_logits(
-            outputs[self._output_name],
+            self._hailo_output,
             values.shape[0],
             self.class_count,
         )
