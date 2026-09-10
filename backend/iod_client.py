@@ -5,10 +5,10 @@ on the Pi that touches SPI0 or I2S directly. It exposes a Unix domain socket
 carrying newline-delimited JSON: one request object per line in, one response
 object per line out. See ``iod/src/protocol.rs`` for the command list.
 
-Record mode opens a live stream so the backend can run Hailo inference while it
-also writes the PCM frames to a WAV. The capture commands remain wrapped for
-diagnostics and other callers. The sampler itself runs continuously inside
-``iod`` regardless of recording state.
+The backend uses this for Record mode: ``begin_recording`` attaches a capture
+sink (``start_capture``) and ``end_recording`` detaches it and gets back a WAV
+path (``stop_capture``). The sampler itself runs continuously inside ``iod``
+regardless of recording state.
 
 The playback commands are wrapped here too but unused for now — frontend audio
 still plays locally. They become relevant when playback moves onto ``iod``'s
@@ -17,13 +17,10 @@ I2S output.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import socket
-from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Iterator
 
 
 SYSTEM_SOCKET_PATH = "/run/chordsense/iod.sock"
@@ -59,68 +56,6 @@ def default_socket_path() -> str:
 
 class IodError(RuntimeError):
     """``iod`` is unreachable, spoke malformed JSON, or returned ``{"ok": false}``."""
-
-
-@dataclass(frozen=True)
-class IodStreamFrame:
-    """One live mono PCM16 frame received from ``iod``."""
-
-    sample_index: int
-    playback_position_seconds: float
-    pcm16: bytes
-
-
-class IodAudioStream:
-    """Owned ``iod`` stream connection that yields live PCM frames."""
-
-    def __init__(self, sock: socket.socket, reader: BinaryIO | None = None):
-        self._socket = sock
-        self._reader = reader or sock.makefile("rb")
-        self._closed = False
-
-    def __iter__(self) -> Iterator[IodStreamFrame]:
-        while not self._closed:
-            try:
-                line = self._reader.readline()
-            except OSError:
-                if self._closed:
-                    return
-                raise
-            if not line:
-                return
-            try:
-                payload = json.loads(line)
-                pcm16 = base64.b64decode(payload["samples"], validate=True)
-                if len(pcm16) % 2:
-                    raise ValueError("PCM16 payload has an odd byte count")
-                yield IodStreamFrame(
-                    sample_index=int(payload["sample_index"]),
-                    playback_position_seconds=float(
-                        payload.get("playback_position_secs", 0.0)
-                    ),
-                    pcm16=pcm16,
-                )
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise IodError(f"iod sent a malformed stream frame: {line!r}") from exc
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            self._socket.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        try:
-            self._reader.close()
-        finally:
-            self._socket.close()
-
-    def __enter__(self) -> "IodAudioStream":
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self.close()
 
 
 class IodClient:
@@ -176,42 +111,6 @@ class IodClient:
         if not wav_path:
             raise IodError("iod stop_capture returned no wav_path")
         return Path(wav_path), float(response.get("duration_s", 0.0))
-
-    def start_stream(self, frame_samples: int = 441) -> IodAudioStream:
-        """Open a live mono PCM16 stream. Closing it unsubscribes from ``iod``."""
-
-        if frame_samples <= 0:
-            raise ValueError("frame_samples must be positive")
-        request_line = (
-            json.dumps({"cmd": "start_stream", "frame_samples": frame_samples})
-            + "\n"
-        ).encode("utf-8")
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            sock.settimeout(self.timeout)
-            sock.connect(self.socket_path)
-            sock.sendall(request_line)
-            reader = sock.makefile("rb")
-            response_line = reader.readline()
-            if not response_line:
-                reader.close()
-                raise IodError("iod closed the stream connection without responding")
-            response = json.loads(response_line)
-            if not response.get("ok", False):
-                reader.close()
-                raise IodError(
-                    response.get("error", "iod rejected the stream request")
-                )
-            sock.settimeout(None)
-            return IodAudioStream(sock, reader)
-        except (OSError, json.JSONDecodeError) as exc:
-            sock.close()
-            raise IodError(
-                f"cannot start iod stream at {self.socket_path} ({exc})"
-            ) from exc
-        except Exception:
-            sock.close()
-            raise
 
     def status(self) -> dict:
         return self._request({"cmd": "status"})
