@@ -1,6 +1,8 @@
+import atexit
 import os
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -12,31 +14,54 @@ from web_upload import web_upload
 BASE_DIR = Path(__file__).resolve().parent
 # Original: MODEL_REPO = BASE_DIR / "model_repo"
 MODEL_REPO = BASE_DIR / "models" / "chord-cnn-lstm-model"
-CUSTOM_MODEL_CHECKPOINT = (
-    BASE_DIR / "models" / "chordsense_cnn" / "checkpoints" / "latest_chord_cnn.pth"
+DEFAULT_CUSTOM_MODEL_HEF = (
+    BASE_DIR / "models" / "chordsense_cnn" / "checkpoints" / "chordsense.hef"
+)
+CUSTOM_MODEL_HEF = Path(
+    os.environ.get(
+        "CHORDSENSE_HEF",
+        str(DEFAULT_CUSTOM_MODEL_HEF),
+    )
 )
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
 OUTPUTS_DIR = RUNTIME_DIR / "outputs"
+CAPTURES_DIR = RUNTIME_DIR / "captures"
 
-for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
+for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR, CAPTURES_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 app.register_blueprint(web_upload)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
-chord_recognizer = None
 iod = IodClient()
+recording_session = None
+recording_session_lock = threading.Lock()
 
 
-def get_chord_recognizer():
-    global chord_recognizer
-    if chord_recognizer is None:
-        from models.chordsense_cnn.chord_recognition import ChordRecognizer
+def get_recording_session():
+    global recording_session
+    with recording_session_lock:
+        if recording_session is None:
+            from models.chordsense_cnn.streaming import StreamingChordRecognizer
+            from recording_session import HailoRecordingSession
 
-        chord_recognizer = ChordRecognizer(CUSTOM_MODEL_CHECKPOINT)
-    return chord_recognizer
+            recognizer = StreamingChordRecognizer.from_hef(CUSTOM_MODEL_HEF)
+            recording_session = HailoRecordingSession(
+                iod,
+                recognizer,
+                CAPTURES_DIR,
+                OUTPUTS_DIR / "temp.lab",
+            )
+    return recording_session
+
+
+@atexit.register
+def close_recording_session():
+    if recording_session is not None:
+        recording_session.close()
+
 
 def parse_lab_file(lab_path: Path):
     results = []
@@ -106,6 +131,8 @@ def health():
         "success": True,
         "message": "ChordSenseOfficial backend running",
         "model_repo": str(MODEL_REPO),
+        "record_model_backend": "hailo",
+        "record_model_hef": str(CUSTOM_MODEL_HEF),
     })
 
 
@@ -164,57 +191,74 @@ def analyze():
         print(f"Analyze failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.post("/begin_recording")
 def begin_recording():
     print("=== /begin_recording request received ===", flush=True)
     try:
-        print("Attaching iod capture sink...", flush=True)
-        iod.start_capture()
-        return jsonify({"success": True, "message": "Recording started"})
+        print("Starting iod stream and Hailo inference...", flush=True)
+        get_recording_session().start()
+        return jsonify({
+            "success": True,
+            "message": "Recording started with live Hailo inference",
+            "model_used": "chordsense-cnn-hef",
+        })
     except IodError as e:
         print(f"Begin recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 502
+    except Exception as e:
+        print(f"Begin recording failed: {e}", flush=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.get("/recording_predictions")
+def recording_predictions():
+    if recording_session is None:
+        return jsonify({
+            "success": True,
+            "active": False,
+            "audio_seconds": 0.0,
+            "prediction_count": 0,
+            "latest_prediction": None,
+            "error": None,
+        })
+    return jsonify({"success": True, **recording_session.snapshot()})
+
 
 @app.post("/end_recording")
 def end_recording():
     print("=== /end_recording request received ===", flush=True)
-    output_lab_path = OUTPUTS_DIR / "temp.lab"
 
     try:
-        print("Detaching iod capture sink...", flush=True)
-        wav_path, capture_duration = iod.stop_capture()
-        print(f"Capture written to {wav_path} ({capture_duration:.2f}s)", flush=True)
-
-        print("Starting chord recognition...", flush=True)
-        wrote_lab = get_chord_recognizer().from_file(wav_path, output_lab_path)
-        if not wrote_lab or not output_lab_path.exists():
-            return jsonify({
-                "success": False,
-                "error": "Chord recognition produced no output for this capture",
-            }), 500
-
-        chords = parse_lab_file(output_lab_path)
-        duration = chords[-1]["end"] if chords else capture_duration
-
-        print(f"Model finished. Parsed {len(chords)} chords.", flush=True)
+        print("Stopping iod stream and finalizing live predictions...", flush=True)
+        if recording_session is None:
+            raise RuntimeError("no recording is in progress")
+        result = recording_session.stop()
+        chords = [
+            {
+                "start": segment.start,
+                "end": segment.end,
+                "chord": segment.chord,
+                "confidence": segment.confidence,
+            }
+            for segment in result.segments
+        ]
+        print(f"Recording finished with {len(chords)} chord segments.", flush=True)
 
         return jsonify({
             "success": True,
             "chords": chords,
             "total_chords": len(chords),
-            "duration": duration,
-            "model_used": "chordsense-cnn",
-            "model_name": "ChordSenseCNN",
+            "duration": result.duration_seconds,
+            "model_used": "chordsense-cnn-hef",
+            "model_name": "ChordSenseCNN (Hailo)",
             "chord_dict": "submission",
             "processing_time": 0.0,
             "stdout": "",
             "stderr": "",
-            "lab_file": str(output_lab_path),
-            "wav_path": str(wav_path),
+            "lab_file": str(result.lab_path),
+            "wav_path": str(result.wav_path),
         })
-    except IodError as e:
-        print(f"End recording failed (iod): {e}", flush=True)
-        return jsonify({"success": False, "error": str(e)}), 502
     except Exception as e:
         print(f"End recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
