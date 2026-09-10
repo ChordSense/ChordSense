@@ -9,13 +9,16 @@ from typing import Iterable
 
 import numpy as np
 import numpy.typing as npt
-import torch
 from librosa.filters import chroma as chroma_filter
 from scipy.signal import get_window
 
 from .audio_processing import DEFAULT_PREPROCESSING_CONFIG, PreprocessingConfig
 from .config import CHORD_CLASSES, NUM_CLASSES
-from .model import build_model
+from .inference_backends import (
+    HailoInferenceBackend,
+    InferenceBackend,
+    TorchInferenceBackend,
+)
 
 
 FloatArray = npt.NDArray[np.float32]
@@ -225,11 +228,11 @@ class CausalDecisionFilter:
 
 
 class StreamingChordRecognizer:
-    """Run the existing CNN incrementally over causal chroma frames."""
+    """Run the chord classifier incrementally over causal chroma frames."""
 
     def __init__(
         self,
-        model: torch.nn.Module,
+        model: object | None = None,
         preprocessing: PreprocessingConfig = (
             DEFAULT_STREAMING_PREPROCESSING_CONFIG
         ),
@@ -237,13 +240,47 @@ class StreamingChordRecognizer:
         extractor: CausalChromaExtractor | None = None,
         decision_filter: CausalDecisionFilter | None = None,
         temperature: float = 1.0,
+        *,
+        inference_backend: InferenceBackend | None = None,
     ):
         if temperature <= 0:
             raise ValueError("temperature must be positive")
-        self.model = model.to(device).eval()
+        if (model is None) == (inference_backend is None):
+            raise ValueError("Provide exactly one of model or inference_backend")
+
         self.preprocessing = preprocessing
         self.device = device
         self.temperature = temperature
+        expected_input_shape = (
+            1,
+            1,
+            preprocessing.n_chroma,
+            preprocessing.context_frames,
+        )
+        self.backend = (
+            inference_backend
+            if inference_backend is not None
+            else TorchInferenceBackend(
+                model,
+                expected_input_shape,
+                NUM_CLASSES,
+                device,
+            )
+        )
+        try:
+            if self.backend.input_shape != expected_input_shape:
+                raise ValueError(
+                    "Inference backend input shape does not match preprocessing: "
+                    f"expected {expected_input_shape}, got {self.backend.input_shape}"
+                )
+            if self.backend.class_count != NUM_CLASSES:
+                raise ValueError(
+                    "Inference backend class count does not match CHORD_CLASSES: "
+                    f"expected {NUM_CLASSES}, got {self.backend.class_count}"
+                )
+        except Exception:
+            self.backend.close()
+            raise
         self.extractor = extractor or CausalChromaExtractor(
             sample_rate=preprocessing.sample_rate,
             n_fft=preprocessing.stft_n_fft,
@@ -263,6 +300,10 @@ class StreamingChordRecognizer:
         checkpoint_path: str | Path,
         device: str = "cpu",
     ) -> "StreamingChordRecognizer":
+        import torch
+
+        from .model import build_model
+
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
         preprocessing_metadata = checkpoint.get("preprocessing")
         preprocessing = (
@@ -280,19 +321,57 @@ class StreamingChordRecognizer:
         temperature = float(checkpoint.get("calibration", {}).get("temperature", 1.0))
         return cls(model, preprocessing, device, temperature=temperature)
 
+    @classmethod
+    def from_hef(
+        cls,
+        hef_path: str | Path,
+        preprocessing: PreprocessingConfig = (
+            DEFAULT_STREAMING_PREPROCESSING_CONFIG
+        ),
+        temperature: float = 1.0,
+    ) -> "StreamingChordRecognizer":
+        """Create a recognizer whose CNN executes on a Hailo accelerator."""
+
+        backend = HailoInferenceBackend(
+            hef_path,
+            input_shape=(
+                1,
+                1,
+                preprocessing.n_chroma,
+                preprocessing.context_frames,
+            ),
+            class_count=NUM_CLASSES,
+        )
+        try:
+            return cls(
+                preprocessing=preprocessing,
+                temperature=temperature,
+                inference_backend=backend,
+            )
+        except Exception:
+            backend.close()
+            raise
+
     def push_samples(self, samples: npt.ArrayLike) -> list[LivePrediction]:
         predictions: list[LivePrediction] = []
         for feature_frame in self.extractor.push(samples):
             self.frames.append(feature_frame.chroma)
             if len(self.frames) < self.preprocessing.context_frames:
                 continue
-            features = np.stack(tuple(self.frames), axis=1)[None, None, :, :]
-            tensor = torch.from_numpy(np.asarray(features, dtype=np.float32)).to(self.device)
-            with torch.inference_mode():
-                probabilities = torch.softmax(
-                    self.model(tensor) / self.temperature,
-                    dim=1,
-                )[0].cpu().numpy()
+            features = np.asarray(
+                np.stack(tuple(self.frames), axis=1)[None, None, :, :],
+                dtype=np.float32,
+            )
+            logits = np.asarray(self.backend.infer(features), dtype=np.float32)
+            if logits.shape != (1, NUM_CLASSES) or not np.isfinite(logits).all():
+                raise ValueError(
+                    "Inference backend must return finite logits with shape "
+                    f"(1, {NUM_CLASSES}); got {logits.shape}"
+                )
+            scaled_logits = logits[0] / self.temperature
+            scaled_logits -= scaled_logits.max()
+            exponentials = np.exp(scaled_logits)
+            probabilities = exponentials / exponentials.sum()
             state = self.decision.update(probabilities)
             predictions.append(
                 LivePrediction(
@@ -313,6 +392,15 @@ class StreamingChordRecognizer:
         self.extractor.reset()
         self.frames.clear()
         self.decision.reset()
+
+    def close(self) -> None:
+        self.backend.close()
+
+    def __enter__(self) -> "StreamingChordRecognizer":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
 
 def stream_chunks(

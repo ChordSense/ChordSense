@@ -11,7 +11,6 @@ from typing import Iterable
 
 import librosa
 import numpy as np
-import torch
 
 from .audio_processing import feature_window_sample_span, load_audio_file
 from .config import CHORD_CLASSES
@@ -27,13 +26,21 @@ def _synthetic_audio(sample_rate: int, duration_seconds: float) -> np.ndarray:
 
 def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, required=True)
+    model_source = parser.add_mutually_exclusive_group(required=True)
+    model_source.add_argument("--checkpoint", type=Path)
+    model_source.add_argument("--hef", type=Path)
     parser.add_argument("--wav", type=Path)
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument("--frame-samples", type=int, default=441)
     parser.add_argument("--audible-rms-threshold", type=float, default=0.01)
     parser.add_argument("--expected-chord", choices=(*CHORD_CLASSES[:-1], "N"))
     parser.add_argument("--device", choices=("cpu", "mps", "cuda"), default="cpu")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Logit calibration temperature for HEF inference",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args(argv)
 
@@ -44,12 +51,26 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.duration <= 0
         or args.frame_samples <= 0
         or args.audible_rms_threshold < 0
+        or args.temperature <= 0
     ):
         raise ValueError(
             "--duration and --frame-samples must be positive; "
-            "--audible-rms-threshold cannot be negative"
+            "--audible-rms-threshold cannot be negative; "
+            "--temperature must be positive"
         )
-    recognizer = StreamingChordRecognizer.from_checkpoint(args.checkpoint, args.device)
+    recognizer = (
+        StreamingChordRecognizer.from_hef(args.hef, temperature=args.temperature)
+        if args.hef is not None
+        else StreamingChordRecognizer.from_checkpoint(args.checkpoint, args.device)
+    )
+    with recognizer:
+        return _run_benchmark(args, recognizer)
+
+
+def _run_benchmark(
+    args: argparse.Namespace,
+    recognizer: StreamingChordRecognizer,
+) -> int:
     sample_rate = recognizer.preprocessing.sample_rate
     if args.wav is None:
         samples = _synthetic_audio(sample_rate, args.duration)
@@ -117,6 +138,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     result = {
         "source": source,
+        "inference_backend": recognizer.backend.name,
         "audio_seconds": audio_seconds,
         "frame_samples": args.frame_samples,
         "input_frame_milliseconds": args.frame_samples / sample_rate * 1000.0,
@@ -174,8 +196,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         "runtime": {
             "platform": platform.platform(),
             "python": platform.python_version(),
-            "torch": torch.__version__,
-            "device": args.device,
+            "backend": recognizer.backend.name,
+            "device": "hailo" if args.hef is not None else args.device,
         },
     }
     payload = json.dumps(result, indent=2) + "\n"
