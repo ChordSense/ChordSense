@@ -1,10 +1,12 @@
+from typing import Literal, TypedDict
+
+import librosa
 import numpy as np
 import numpy.typing as npt
 from numpy.lib.stride_tricks import sliding_window_view
-from typing import TypedDict
 
 from .audio_processing import DEFAULT_PREPROCESSING_CONFIG, PreprocessingConfig
-from .config import VOTE_WINDOW
+from .config import CHORD_CLASSES, POST_ONSET_LENGTH, POST_ONSET_OFFSET, VOTE_WINDOW
 
 
 IntArray = npt.NDArray[np.int64]
@@ -57,17 +59,11 @@ def final_prediction(
     analysis_waveform: FloatArray,
     preprocessing: PreprocessingConfig = DEFAULT_PREPROCESSING_CONFIG,
     frame_confidences: FloatArray | None = None,
+    segmentation_mode: Literal["onset", "framewise"] = "framewise",
+    onset_decision_offset: int = POST_ONSET_OFFSET,
+    onset_decision_window: int = POST_ONSET_LENGTH,
 ) -> PredictionResult:
-    """Convert every model frame into contiguous segments.
-
-    The previous implementation changed labels only at detected onsets. A
-    missed onset therefore turned an otherwise confident chord prediction into
-    an all-Noise transcript. Direct run-length encoding is deterministic,
-    retains rests, and is compatible with both offline and causal front ends.
-    ``analysis_waveform`` and ``preprocessing`` remain in the signature for API
-    compatibility with older callers.
-    """
-    del analysis_waveform, preprocessing
+    """Convert smoothed frame labels into segments using the selected policy."""
     frame_labels = np.asarray(smoothed_predictions, dtype=np.int64)
     if frame_labels.ndim != 1 or frame_labels.size == 0:
         raise ValueError("smoothed_predictions must be a non-empty one-dimensional array")
@@ -80,6 +76,26 @@ def final_prediction(
         if not np.isfinite(confidences).all():
             raise ValueError("frame_confidences contains non-finite values")
 
+    if segmentation_mode == "onset":
+        return _onset_aware_prediction(
+            frame_labels,
+            confidences,
+            analysis_waveform,
+            preprocessing,
+            onset_decision_offset,
+            onset_decision_window,
+        )
+    if segmentation_mode != "framewise":
+        raise ValueError(f"Unsupported segmentation mode: {segmentation_mode}")
+
+    return _framewise_prediction(frame_labels, confidences)
+
+
+def _framewise_prediction(
+    frame_labels: IntArray,
+    confidences: FloatArray,
+) -> PredictionResult:
+    """Expose each contiguous label run for causal/live consumers."""
     segments: list[tuple[int, int, int]] = []
     current_chord = int(frame_labels[0])
     current_start = 0
@@ -96,4 +112,53 @@ def final_prediction(
         "frame_confidences": confidences,
         "segments": segments,
         "onset_frames": np.empty(0, dtype=np.int64),
+    }
+
+
+def _onset_aware_prediction(
+    smoothed_predictions: IntArray,
+    confidences: FloatArray,
+    analysis_waveform: FloatArray,
+    preprocessing: PreprocessingConfig,
+    onset_decision_offset: int,
+    onset_decision_window: int,
+) -> PredictionResult:
+    """Reproduce the stable whole-recording transition behavior from main."""
+    noise_index = CHORD_CLASSES.index("Noise")
+    onsets = np.asarray(
+        librosa.onset.onset_detect(
+            y=analysis_waveform,
+            sr=preprocessing.sample_rate,
+            hop_length=preprocessing.hop_length,
+            backtrack=True,
+        ),
+        dtype=np.int64,
+    )
+
+    frame_labels = np.empty_like(smoothed_predictions)
+    segments: list[tuple[int, int, int]] = []
+    current_chord = noise_index
+    current_start = 0
+
+    for onset_frame in onsets.tolist():
+        start = onset_frame + onset_decision_offset
+        end = min(start + onset_decision_window, len(smoothed_predictions))
+        if start >= len(smoothed_predictions):
+            break
+
+        post_onset_chord = _majority_label(smoothed_predictions[start:end])
+        if post_onset_chord != current_chord:
+            segments.append((current_start, onset_frame, current_chord))
+            current_start = onset_frame
+            current_chord = post_onset_chord
+
+    segments.append((current_start, len(smoothed_predictions), current_chord))
+    for start, end, label in segments:
+        frame_labels[start:end] = label
+
+    return {
+        "frame_labels": frame_labels,
+        "frame_confidences": confidences,
+        "segments": segments,
+        "onset_frames": onsets,
     }

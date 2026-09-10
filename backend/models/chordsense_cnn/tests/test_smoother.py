@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -45,6 +46,23 @@ class SmootherTests(unittest.TestCase):
         np.testing.assert_array_equal(result["frame_labels"], labels)
         np.testing.assert_allclose(result["frame_confidences"], confidence)
         self.assertEqual(result["onset_frames"].size, 0)
+
+    def test_onset_segmentation_ignores_changes_between_onsets(self):
+        labels = np.array([24, 24, 0, 0, 1, 1, 1, 0], dtype=np.int64)
+        confidence = np.ones(len(labels), dtype=np.float32)
+
+        with mock.patch(
+            "models.chordsense_cnn.smoother.librosa.onset.onset_detect",
+            return_value=np.array([0], dtype=np.int64),
+        ):
+            result = final_prediction(
+                labels,
+                np.zeros(100, dtype=np.float32),
+                frame_confidences=confidence,
+                segmentation_mode="onset",
+            )
+
+        self.assertEqual(result["segments"], [(0, 0, 24), (0, len(labels), 1)])
 
 
 if __name__ == "__main__":
