@@ -1,7 +1,8 @@
 @font-face {
     font-family: "Rakkas";
-    src: url("/fonts/Rakkas-Regular.ttf")
+    src: url("/assets/font/Rakkas-Regular.ttf")
         format("truetype");
+    font-display: swap;
 }
 
 :root {
@@ -141,12 +142,12 @@ body {
         clamp(14px, 1.2vw, 18px);
 }
 
-.toolbar button:hover {
+.toolbar button:not(:disabled):hover {
     transform:
         translateY(-1px);
 }
 
-.toolbar button:active {
+.toolbar button:not(:disabled):active {
     transform:
         translateY(1px);
 }
@@ -233,14 +234,20 @@ body {
         transform 150ms ease;
 }
 
-.icon-button:hover {
+.icon-button:not(:disabled):hover {
     transform:
         scale(1.08);
 }
 
-.icon-button:active {
+.icon-button:not(:disabled):active {
     transform:
         scale(0.95);
+}
+
+.icon-button:disabled,
+.timeline input:disabled {
+    cursor: default;
+    opacity: 0.35;
 }
 
 .icon-button img {

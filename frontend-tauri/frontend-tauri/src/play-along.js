@@ -1,11 +1,6 @@
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
 
-console.log("ChordSense JS loaded");
-
-// const status = document.querySelector("#backend-status");
-// const button = document.querySelector("#check-backend");
-
 const state = {
     audioPath: null,
 
@@ -15,12 +10,13 @@ const state = {
 
     audioObjectUrl: null,
 
+    loading: false,
     analyzing: false,
 
     chords: [],
     analysisDuration: 0,
 
-    lastActiveChordIndex: -1,
+    lastActiveChordIndex: null,
 
     isChordTransitioning: false,
 };
@@ -432,19 +428,15 @@ function closeAudioLibrary() {
     loadButton.focus();
 }
 
-function applyLoadedAudio({
-    name,
-    bytes,
-    localPath = null,
-    uploadedFileName = null
-}) {
+function clearAudioSource() {
 
     audio.pause();
 
+    audio.removeAttribute("src");
 
-    /*
-     * Clean up old Blob URL.
-     */
+    audio.load();
+
+
     if (state.audioObjectUrl) {
 
         URL.revokeObjectURL(
@@ -454,6 +446,16 @@ function applyLoadedAudio({
         state.audioObjectUrl =
             null;
     }
+}
+
+function applyLoadedAudio({
+    name,
+    bytes,
+    localPath = null,
+    uploadedFileName = null
+}) {
+
+    clearAudioSource();
 
 
     state.audioPath =
@@ -472,7 +474,7 @@ function applyLoadedAudio({
         0;
 
     state.lastActiveChordIndex =
-        -1;
+        null;
 
 
     songName.textContent =
@@ -483,8 +485,8 @@ function applyLoadedAudio({
         "Audio loaded. Press Analyze.";
 
 
-    emptyState.innerHTML =
-        "Audio loaded.<br />Press Analyze to detect chords.";
+    emptyState.textContent =
+        "Audio loaded. Press Analyze to detect chords.";
 
 
     chordDisplay.classList.add(
@@ -523,6 +525,8 @@ function applyLoadedAudio({
 
 
     audio.load();
+
+    updatePlayerUI();
 }
 
 function simplifyChord(raw) {
@@ -692,10 +696,10 @@ function chordImagePath(rawChord) {
             fileName = `${rootFile}7.png`;
             break;
         case "major7":
-            fileName = `${rootFile}maj7.png`
+            fileName = `${rootFile}maj7.png`;
             break;
         case "minor7":
-            fileName = `${rootFile}m7.png`
+            fileName = `${rootFile}m7.png`;
             break;
         default:
             console.warn(
@@ -723,12 +727,33 @@ function getChordSet(time) {
         activeChordIndex(time);
 
     if (index === -1) {
+        const nextIndex =
+            state.chords.findIndex(
+                chord => time < chord.start
+            );
+
+        if (nextIndex === -1) {
+            return {
+                index: -1,
+                previous:
+                    state.chords.at(-1) ?? null,
+                current: null,
+                next: null,
+                incoming: null
+            };
+        }
+
         return {
             index: -1,
-            previous: null,
+            previous:
+                nextIndex > 0
+                    ? state.chords[nextIndex - 1]
+                    : null,
             current: null,
-            next: state.chords[0] ?? null,
-            incoming: state.chords[1] ?? null
+            next:
+                state.chords[nextIndex] ?? null,
+            incoming:
+                state.chords[nextIndex + 1] ?? null
         };
     }
 
@@ -769,12 +794,6 @@ function displayChord(
         return;
     }
 
-    console.log(
-        "RAW CHORD:",
-        chord.chord,
-        "PARSED:",
-        simplifyChord(chord.chord)
-    );
     const path =
         chordImagePath(chord.chord);
 
@@ -812,7 +831,7 @@ function updateChordDisplay() {
      * Initial render or manual seek:
      * immediately show correct chords.
      */
-    if (state.lastActiveChordIndex === -1) {
+    if (state.lastActiveChordIndex === null) {
         renderChordSet(
             previous,
             current,
@@ -950,16 +969,6 @@ function renderChordSet(previous, current, next, incoming) {
     );
 }
 
-function prettyChord(raw) {
-    if (!raw || raw === "N") {
-        return "No chord";
-    }
-
-    return raw
-        .replace(":maj", "")
-        .replace(":min", "m");
-}
-
 function getAudioMimeType(path) {
 
     const lower =
@@ -994,10 +1003,45 @@ function getAudioMimeType(path) {
     return "application/octet-stream";
 }
 
+function updateControls() {
+
+    const hasAudio =
+        Boolean(
+            audio.getAttribute("src")
+        );
+
+    const canAnalyze =
+        Boolean(
+            state.audioPath ||
+            state.uploadedFileName
+        );
+
+
+    loadButton.disabled =
+        state.loading || state.analyzing;
+
+    analyzeButton.disabled =
+        !canAnalyze ||
+        state.loading ||
+        state.analyzing;
+
+    playPauseButton.disabled =
+        !hasAudio;
+
+    stopButton.disabled =
+        !hasAudio;
+
+    seekSlider.disabled =
+        !hasAudio;
+}
+
 async function browseLocalAudio() {
 
-    const selected =
-        await open({
+    let selected;
+
+
+    try {
+        selected = await open({
             multiple: false,
 
             filters: [
@@ -1014,11 +1058,28 @@ async function browseLocalAudio() {
                 }
             ]
         });
+    } catch (error) {
+
+        console.error(error);
+
+        status.textContent =
+            `Could not open the file picker: ${error}`;
+
+        return;
+    }
 
 
     if (!selected) {
         return;
     }
+
+
+    state.loading = true;
+
+    updateControls();
+
+    status.textContent =
+        "Loading audio...";
 
 
     try {
@@ -1060,6 +1121,12 @@ async function browseLocalAudio() {
 
         status.textContent =
             `Could not load audio: ${error}`;
+
+    } finally {
+
+        state.loading = false;
+
+        updateControls();
     }
 }
 
@@ -1084,6 +1151,10 @@ async function loadSelectedLibrarySong() {
 
     loadLibrarySongButton.disabled =
         true;
+
+    state.loading = true;
+
+    updateControls();
 
 
     audioLibraryStatus.textContent =
@@ -1135,6 +1206,12 @@ async function loadSelectedLibrarySong() {
 
         loadLibrarySongButton.disabled =
             false;
+
+    } finally {
+
+        state.loading = false;
+
+        updateControls();
     }
 }
 
@@ -1150,8 +1227,7 @@ async function analyzeAudio() {
 
     state.analyzing = true;
 
-    analyzeButton.disabled = true;
-    loadButton.disabled = true;
+    updateControls();
 
     status.textContent =
         "Analyzing audio...";
@@ -1210,16 +1286,29 @@ async function analyzeAudio() {
         state.analysisDuration =
             result.duration ?? 0;
 
-        state.lastActiveChordIndex = -1;
+        state.lastActiveChordIndex = null;
 
         status.textContent =
             `Analysis complete. ` +
             `${state.chords.length} chords found.`;
 
-        emptyState.classList.add("hidden");
-        chordDisplay.classList.remove("hidden");
+        if (state.chords.length) {
 
-        updateChordDisplay();
+            emptyState.classList.add("hidden");
+
+            chordDisplay.classList.remove("hidden");
+
+            updateChordDisplay();
+
+        } else {
+
+            chordDisplay.classList.add("hidden");
+
+            emptyState.textContent =
+                "No chords were detected in this audio.";
+
+            emptyState.classList.remove("hidden");
+        }
 
     } catch (error) {
         console.error(error);
@@ -1233,22 +1322,9 @@ async function analyzeAudio() {
     } finally {
         state.analyzing = false;
 
-        analyzeButton.disabled = false;
-        loadButton.disabled = false;
+        updateControls();
     }
 }
-
-// async function togglePlayback() {
-//     if (!state.audioPath) {
-//         return;
-//     }
-
-//     if (audio.paused) {
-//         await audio.play();
-//     } else {
-//         audio.pause();
-//     }
-// }
 
 async function togglePlayback() {
 
@@ -1258,31 +1334,25 @@ async function togglePlayback() {
      * source came from a local filesystem path.
      */
     if (!audio.getAttribute("src")) {
-        console.error("No audio loaded");
+        status.textContent =
+            "Load an audio file before starting playback.";
         return;
     }
-
-    console.log("Audio src:", audio.src);
-    console.log("readyState:", audio.readyState);
-    console.log("networkState:", audio.networkState);
-    console.log("duration:", audio.duration);
-    console.log("audio error:", audio.error);
 
     if (audio.paused) {
         try {
 
             await audio.play();
 
-            console.log(
-                "Playback started"
-            );
-
         } catch (error) {
 
             console.error(
-                "PLAYBACK FAILED:",
+                "Playback failed:",
                 error
             );
+
+            status.textContent =
+                `Playback failed: ${error}`;
         }
 
     } else {
@@ -1309,7 +1379,7 @@ function seekAudio() {
     audio.currentTime =
         Number(seekSlider.value);
 
-    state.lastActiveChordIndex = -1;
+    state.lastActiveChordIndex = null;
 
     updatePlayerUI();
     updateChordDisplay();
@@ -1347,6 +1417,13 @@ function updatePlayerUI() {
         audio.paused
             ? "assets/icons/play-button.png"
             : "assets/icons/pause.png";
+
+    playPauseButton.setAttribute(
+        "aria-label",
+        audio.paused ? "Play" : "Pause"
+    );
+
+    updateControls();
 }
 
 function formatTime(seconds) {
@@ -1449,7 +1526,7 @@ seekSlider.addEventListener(
     seekAudio
 );
 
-audio.volume = 0.8;
+audio.volume = Number(volumeSlider.value);
 
 updatePlayerUI();
 
@@ -1460,11 +1537,7 @@ export async function loadRecordedAnalysis(
     /*
      * Stop any previously loaded song.
      */
-    audio.pause();
-
-    audio.removeAttribute("src");
-
-    audio.load();
+    clearAudioSource();
 
 
     state.audioPath = null;
@@ -1480,20 +1553,36 @@ export async function loadRecordedAnalysis(
         result.duration ?? 0;
 
     state.lastActiveChordIndex =
-        -1;
+        null;
 
 
     songName.textContent =
         "Recorded Session";
 
 
-    emptyState.classList.add(
-        "hidden"
-    );
+    if (state.chords.length) {
 
-    chordDisplay.classList.remove(
-        "hidden"
-    );
+        emptyState.classList.add(
+            "hidden"
+        );
+
+        chordDisplay.classList.remove(
+            "hidden"
+        );
+
+    } else {
+
+        chordDisplay.classList.add(
+            "hidden"
+        );
+
+        emptyState.textContent =
+            "No chords were detected in this recording.";
+
+        emptyState.classList.remove(
+            "hidden"
+        );
+    }
 
 
     /*
@@ -1524,8 +1613,11 @@ export async function loadRecordedAnalysis(
                 }
             );
 
-            audio.src =
+            state.audioObjectUrl =
                 URL.createObjectURL(audioBlob);
+
+            audio.src =
+                state.audioObjectUrl;
 
             audio.load();
 
@@ -1723,25 +1815,3 @@ audioLibraryModal.addEventListener(
         }
     }
 );
-
-
-// old function for checking backend connection
-// async function checkBackend() {
-//     status.textContent = "Checking...";
-
-//     try {
-//         const result = await invoke("backend_health");
-
-//         console.log(result);
-
-//         status.textContent = "Backend connected";
-//     } catch (error) {
-//         console.error(error);
-
-//         status.textContent = `Backend error: ${error}`;
-//     }
-// }
-
-// button.addEventListener("click", checkBackend);
-
-// checkBackend();
