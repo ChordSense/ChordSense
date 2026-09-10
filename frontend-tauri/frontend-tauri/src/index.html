@@ -280,12 +280,13 @@
     <!-- actual audio engine -->
     <audio id="audio-player"></audio>
 
-    <!-- CHORDSENSE AUDIO LIBRARY -->
+    <!-- CHORDSENSE LIBRARY -->
     <div
         id="audio-library-modal"
         class="audio-library-modal hidden"
         aria-hidden="true"
     >
+
         <section
             class="audio-library-dialog"
             role="dialog"
@@ -297,23 +298,24 @@
 
                 <div>
                     <p class="audio-library-eyebrow">
-                        CHORDSENSE
+                        ChordSense
                     </p>
 
                     <h2 id="audio-library-title">
-                        Audio Library
+                        Library
                     </h2>
 
                     <p class="audio-library-subtitle">
-                        Select a song uploaded to ChordSense.
+                        Choose a song to load.
                     </p>
                 </div>
+
 
                 <button
                     id="close-audio-library"
                     class="audio-library-close"
                     type="button"
-                    aria-label="Close audio library"
+                    aria-label="Close library"
                 >
                     ×
                 </button>
@@ -322,9 +324,11 @@
 
 
             <div class="audio-library-shortcuts">
-                <span>↑ ↓ Navigate</span>
-                <span>Enter Select</span>
-                <span>Esc Close</span>
+                ↑ ↓ Navigate
+                <span>•</span>
+                Enter Load
+                <span>•</span>
+                Esc Close
             </div>
 
 
@@ -341,7 +345,7 @@
                 id="audio-library-empty"
                 class="audio-library-empty hidden"
             >
-                No songs have been uploaded yet.
+                No songs uploaded yet.
             </div>
 
 
@@ -358,8 +362,9 @@
                     class="library-button secondary"
                     type="button"
                 >
-                    Browse This Device
+                    Browse Device
                 </button>
+
 
                 <div class="audio-library-actions-right">
 
@@ -377,7 +382,7 @@
                         type="button"
                         disabled
                     >
-                        Load Selected
+                        Load Song
                     </button>
 
                 </div>
@@ -385,6 +390,7 @@
             </footer>
 
         </section>
+
     </div>
 
 </main>
