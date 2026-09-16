@@ -1,56 +1,213 @@
 <!doctype html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ChordSense Upload</title>
-    <link rel="stylesheet" href="{{ url_for('web_upload.static', filename='upload.css') }}" />
-    <script defer src="{{ url_for('web_upload.static', filename='upload.js') }}"></script>
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    />
+
+    <title>ChordSense</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('web_upload.static', filename='upload.css') }}"
+    />
+
+    <script
+        defer
+        src="{{ url_for('web_upload.static', filename='upload.js') }}"
+    ></script>
 </head>
+
 <body>
+
 <main class="page-shell">
-    <header class="header">
-        <div>
-            <p class="eyebrow">CHORDSENSE</p>
-            <h1>Send audio to your ChordSense</h1>
-            <p class="subtitle">Upload a song from this device and store it directly on the ChordSense computer.</p>
+
+    <header class="hero">
+
+        <div class="brand-block">
+
+            <div class="brand">
+                ChordSense
+            </div>
+
+            <div
+                id="connection-status"
+                class="connection-status"
+            >
+                Checking connection...
+            </div>
+
         </div>
-        <div id="connection-badge" class="connection-badge">Checking connection…</div>
+
+        <h1>
+            Send Songs to ChordSense
+        </h1>
+
+        <p>
+            Upload a song from this device.
+            It will appear in your ChordSense Library.
+        </p>
+
     </header>
 
-    <section class="upload-card">
-        <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Choose an audio file">
-            <input id="file-input" type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a" hidden />
-            <p class="drop-title">Drop an audio file here</p>
-            <p class="drop-copy">or click to choose a file</p>
-            <button id="choose-file" class="button secondary" type="button">Choose Audio</button>
+
+    <section class="card">
+
+        <div class="card-heading">
+            <h2>Upload a Song</h2>
+
+            <p>
+                Choose a file or drag it below.
+            </p>
         </div>
 
-        <div id="selection" class="selection hidden">
-            <div>
-                <p class="selection-label">Selected file</p>
+
+        <div
+            id="drop-zone"
+            class="drop-zone"
+            tabindex="0"
+            role="button"
+            aria-label="Choose an audio file"
+        >
+
+            <input
+                id="file-input"
+                type="file"
+                accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"
+                hidden
+            />
+
+            <p class="drop-title">
+                Drop a song here
+            </p>
+
+            <p class="drop-copy">
+                MP3, WAV, FLAC, M4A, or OGG
+            </p>
+
+            <button
+                id="choose-file"
+                class="button secondary"
+                type="button"
+            >
+                Choose Song
+            </button>
+
+        </div>
+
+
+        <div
+            id="selection"
+            class="selection hidden"
+        >
+
+            <div class="selected-file">
+
+                <span class="selection-label">
+                    Selected
+                </span>
+
                 <strong id="selected-name"></strong>
-                <p id="selected-size" class="muted"></p>
+
+                <span
+                    id="selected-size"
+                    class="muted"
+                ></span>
+
             </div>
-            <button id="upload-button" class="button primary" type="button">Send to ChordSense</button>
+
+            <button
+                id="upload-button"
+                class="button primary"
+                type="button"
+            >
+                Send to ChordSense
+            </button>
+
         </div>
 
-        <div id="progress-panel" class="progress-panel hidden">
-            <div class="progress-row"><span>Uploading…</span><span id="progress-percent">0%</span></div>
-            <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+
+        <div
+            id="progress-panel"
+            class="progress-panel hidden"
+        >
+
+            <div class="progress-row">
+
+            <span id="progress-label">
+                Sending song...
+            </span>
+
+            <span id="progress-percent">
+                0%
+            </span>
+
         </div>
 
-        <p id="status-message" class="status-message" aria-live="polite"></p>
+            <div class="progress-track">
+
+                <div
+                    id="progress-bar"
+                    class="progress-bar"
+                ></div>
+
+            </div>
+
+        </div>
+
+
+        <p
+            id="status-message"
+            class="status-message"
+            aria-live="polite"
+        ></p>
+
     </section>
+
 
     <section class="library-section">
+
         <div class="section-heading">
-            <div><p class="eyebrow">ON CHORDSENSE</p><h2>Audio Library</h2></div>
-            <button id="refresh-button" class="button secondary" type="button">Refresh</button>
+
+            <div>
+                <h2>Uploaded Songs</h2>
+
+                <p>
+                    Songs available in the ChordSense Library.
+                </p>
+            </div>
+
+            <button
+                id="refresh-button"
+                class="button secondary"
+                type="button"
+            >
+                Refresh
+            </button>
+
         </div>
-        <div id="library-empty" class="empty-state hidden">No uploaded audio yet.</div>
-        <div id="library-list" class="library-list"></div>
+
+
+        <div
+            id="library-empty"
+            class="empty-state hidden"
+        >
+            No songs uploaded yet.
+        </div>
+
+
+        <div
+            id="library-list"
+            class="library-list"
+        ></div>
+
     </section>
+
 </main>
+
 </body>
 </html>
