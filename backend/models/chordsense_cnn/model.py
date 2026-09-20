@@ -3,6 +3,15 @@ import torch.nn.functional as F
 import torch.nn as nn
 from .config import *
 
+
+MODEL_NAMES = ("baseline", "pitch_aware", "depthwise_pitch")
+
+
+def _circular_pitch_pad(values: torch.Tensor, amount: int = 1) -> torch.Tensor:
+    """Wrap chroma pitch rows so convolution treats B and C as adjacent."""
+    return F.pad(values, (0, 0, amount, amount), mode="circular")
+
+
 class ChordCNN(nn.Module):
     def __init__(self, num_classes: int = NUM_CLASSES):
         super().__init__()
@@ -50,9 +59,95 @@ class ChordCNN(nn.Module):
         probs = F.softmax(logits, dim=1)
         return probs.argmax(dim=1), probs
 
-def build_model(num_classes: int = NUM_CLASSES) -> ChordCNN:
+
+class PitchAwareChordCNN(nn.Module):
+    """Small CNN that keeps absolute pitch rows through the classifier."""
+
+    def __init__(self, num_classes: int = NUM_CLASSES):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=(0, 1))
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 24, kernel_size=3, padding=(0, 1))
+        self.bn2 = nn.BatchNorm2d(24)
+        self.dropout = nn.Dropout2d(0.15)
+        self.classifier = nn.Sequential(
+            nn.Linear(24 * 12, 48),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(48, num_classes),
+        )
+
+    def forward(self, values: torch.Tensor) -> torch.Tensor:
+        values = self.dropout(
+            F.relu(self.bn1(self.conv1(_circular_pitch_pad(values))))
+        )
+        values = self.dropout(
+            F.relu(self.bn2(self.conv2(_circular_pitch_pad(values))))
+        )
+        if values.shape[-1] >= 2:
+            values = F.max_pool2d(values, kernel_size=(1, 2), stride=(1, 2))
+        values = values.mean(dim=3).flatten(1)
+        return self.classifier(values)
+
+
+class DepthwisePitchChordCNN(nn.Module):
+    """Depthwise-separable pitch-aware candidate for edge inference."""
+
+    def __init__(self, num_classes: int = NUM_CLASSES):
+        super().__init__()
+        self.stem = nn.Conv2d(1, 16, kernel_size=3, padding=(0, 1))
+        self.stem_bn = nn.BatchNorm2d(16)
+        self.depthwise = nn.Conv2d(
+            16,
+            16,
+            kernel_size=3,
+            padding=(0, 1),
+            groups=16,
+        )
+        self.pointwise = nn.Conv2d(16, 24, kernel_size=1)
+        self.bn = nn.BatchNorm2d(24)
+        self.dropout = nn.Dropout2d(0.15)
+        self.classifier = nn.Sequential(
+            nn.Linear(24 * 12, 32),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(32, num_classes),
+        )
+
+    def forward(self, values: torch.Tensor) -> torch.Tensor:
+        values = self.dropout(
+            F.relu(self.stem_bn(self.stem(_circular_pitch_pad(values))))
+        )
+        values = self.dropout(
+            F.relu(self.bn(self.pointwise(self.depthwise(_circular_pitch_pad(values)))))
+        )
+        if values.shape[-1] >= 2:
+            values = F.max_pool2d(values, kernel_size=(1, 2), stride=(1, 2))
+        values = values.mean(dim=3).flatten(1)
+        return self.classifier(values)
+
+
+def build_model(
+    num_classes: int = NUM_CLASSES,
+    model_name: str = "baseline",
+) -> nn.Module:
     """Create model with Kaiming initialization."""
-    model = ChordCNN(num_classes)
+    aliases = {
+        "ChordCNN": "baseline",
+        "PitchAwareChordCNN": "pitch_aware",
+        "DepthwisePitchChordCNN": "depthwise_pitch",
+    }
+    model_name = aliases.get(model_name, model_name)
+    builders = {
+        "baseline": ChordCNN,
+        "pitch_aware": PitchAwareChordCNN,
+        "depthwise_pitch": DepthwisePitchChordCNN,
+    }
+    if model_name not in builders:
+        raise ValueError(
+            f"Unknown model_name {model_name!r}; expected one of {MODEL_NAMES}"
+        )
+    model = builders[model_name](num_classes)
     for m in model.modules():
         if isinstance(m, nn.Conv2d):
             nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')

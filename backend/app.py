@@ -1,3 +1,4 @@
+import atexit
 import os
 import subprocess
 import tempfile
@@ -12,8 +13,14 @@ from web_upload import web_upload
 BASE_DIR = Path(__file__).resolve().parent
 # Original: MODEL_REPO = BASE_DIR / "model_repo"
 MODEL_REPO = BASE_DIR / "models" / "chord-cnn-lstm-model"
-CUSTOM_MODEL_CHECKPOINT = (
-    BASE_DIR / "models" / "chordsense_cnn" / "checkpoints" / "latest_chord_cnn.pth"
+DEFAULT_CUSTOM_MODEL_HEF = (
+    BASE_DIR / "models" / "chordsense_cnn" / "checkpoints" / "chordsense.hef"
+)
+CUSTOM_MODEL_HEF = Path(
+    os.environ.get(
+        "CHORDSENSE_HEF",
+        str(DEFAULT_CUSTOM_MODEL_HEF),
+    )
 )
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
@@ -26,17 +33,30 @@ app = Flask(__name__)
 app.register_blueprint(web_upload)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
-chord_recognizer = None
 iod = IodClient()
+recording_recognizer = None
 
 
-def get_chord_recognizer():
-    global chord_recognizer
-    if chord_recognizer is None:
-        from models.chordsense_cnn.chord_recognition import ChordRecognizer
+def get_recording_recognizer():
+    global recording_recognizer
+    if recording_recognizer is None:
+        from models.chordsense_cnn.chord_recognition import (
+            HailoChordRecognizer,
+            OFFLINE_POSTPROCESSING,
+        )
 
-        chord_recognizer = ChordRecognizer(CUSTOM_MODEL_CHECKPOINT)
-    return chord_recognizer
+        recording_recognizer = HailoChordRecognizer(
+            CUSTOM_MODEL_HEF,
+            postprocessing=OFFLINE_POSTPROCESSING,
+        )
+    return recording_recognizer
+
+
+@atexit.register
+def close_recording_recognizer():
+    if recording_recognizer is not None:
+        recording_recognizer.close()
+
 
 def parse_lab_file(lab_path: Path):
     results = []
@@ -106,6 +126,8 @@ def health():
         "success": True,
         "message": "ChordSenseOfficial backend running",
         "model_repo": str(MODEL_REPO),
+        "record_model_backend": "hailo",
+        "record_model_hef": str(CUSTOM_MODEL_HEF),
     })
 
 
@@ -164,16 +186,25 @@ def analyze():
         print(f"Analyze failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.post("/begin_recording")
 def begin_recording():
     print("=== /begin_recording request received ===", flush=True)
     try:
         print("Attaching iod capture sink...", flush=True)
         iod.start_capture()
-        return jsonify({"success": True, "message": "Recording started"})
+        return jsonify({
+            "success": True,
+            "message": "Recording started",
+            "model_used": "chordsense-cnn-hef",
+        })
     except IodError as e:
         print(f"Begin recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 502
+    except Exception as e:
+        print(f"Begin recording failed: {e}", flush=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.post("/end_recording")
 def end_recording():
@@ -185,28 +216,31 @@ def end_recording():
         wav_path, capture_duration = iod.stop_capture()
         print(f"Capture written to {wav_path} ({capture_duration:.2f}s)", flush=True)
 
-        print("Starting chord recognition...", flush=True)
-        wrote_lab = get_chord_recognizer().from_file(wav_path, output_lab_path)
-        if not wrote_lab or not output_lab_path.exists():
-            return jsonify({
-                "success": False,
-                "error": "Chord recognition produced no output for this capture",
-            }), 500
-
-        chords = parse_lab_file(output_lab_path)
-        duration = chords[-1]["end"] if chords else capture_duration
-
-        print(f"Model finished. Parsed {len(chords)} chords.", flush=True)
+        print("Running whole-recording inference on Hailo...", flush=True)
+        recognizer = get_recording_recognizer()
+        result = recognizer.analyze_file(wav_path)
+        if not recognizer.write_lab_file(result, output_lab_path):
+            raise RuntimeError("Chord recognition produced no output")
+        chords = [
+            {
+                "start": segment.start,
+                "end": segment.end,
+                "chord": segment.chord,
+                "confidence": segment.confidence,
+            }
+            for segment in result.segments
+        ]
+        print(f"Hailo inference produced {len(chords)} chord segments.", flush=True)
 
         return jsonify({
             "success": True,
             "chords": chords,
             "total_chords": len(chords),
-            "duration": duration,
-            "model_used": "chordsense-cnn",
-            "model_name": "ChordSenseCNN",
+            "duration": result.duration_seconds,
+            "model_used": "chordsense-cnn-hef",
+            "model_name": "ChordSenseCNN (Hailo)",
             "chord_dict": "submission",
-            "processing_time": 0.0,
+            "processing_time": result.processing_seconds,
             "stdout": "",
             "stderr": "",
             "lab_file": str(output_lab_path),
@@ -218,7 +252,7 @@ def end_recording():
     except Exception as e:
         print(f"End recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
-    
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5051, debug=False)
