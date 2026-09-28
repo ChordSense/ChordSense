@@ -10,9 +10,9 @@ sink (``start_capture``) and ``end_recording`` detaches it and gets back a WAV
 path (``stop_capture``). The sampler itself runs continuously inside ``iod``
 regardless of recording state.
 
-The playback commands are wrapped here too but unused for now — frontend audio
-still plays locally. They become relevant when playback moves onto ``iod``'s
-I2S output.
+Playback also goes through ``iod``: it plays the backing track / recorded take
+out of the PCM5102A DAC (I2S) to the pedal's headphone jack. The ``/playback/*``
+routes in ``app.py`` proxy these for the frontend.
 """
 
 from __future__ import annotations
@@ -220,7 +220,13 @@ class IodClient:
         """Subscribe to live guitar PCM; separate from the short control requests."""
         return IodStream(self.socket_path, frame_samples, timeout)
 
-    # -- playback (wrapped for later; frontend audio is still local) --
+    # -- playback (I2S DAC -> headphone jack) --
+
+    def load(self, path: str | Path) -> float | None:
+        """Load a file paused at 0. Returns its duration in seconds, if known."""
+        response = self._request({"cmd": "load", "path": str(path)})
+        duration = response.get("duration_secs")
+        return float(duration) if duration is not None else None
 
     def play(self, path: str | Path) -> None:
         self._request({"cmd": "play", "path": str(path)})

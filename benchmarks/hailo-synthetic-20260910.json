@@ -1,0 +1,41 @@
+{
+  "source": "synthetic-a-major",
+  "inference_backend": "hailo",
+  "audio_seconds": 60.0,
+  "frame_samples": 441,
+  "input_frame_milliseconds": 20.0,
+  "algorithmic_first_prediction_milliseconds": 417.9591836734694,
+  "algorithmic_confirmed_change_milliseconds": 441.1791383219955,
+  "preprocessing": {
+    "feature_type": "chroma_stft",
+    "sample_rate": 22050,
+    "n_fft": 2048,
+    "hop_length": 512,
+    "context_frames": 15
+  },
+  "chunks": 3000,
+  "predictions": 2566,
+  "first_prediction_audio_seconds": 0.4179591836734694,
+  "first_chord_audio_seconds": null,
+  "first_chord_label": null,
+  "expected_chord": "A",
+  "first_audible_audio_seconds": 0.0,
+  "first_chord_after_audible_milliseconds": null,
+  "first_correct_audio_seconds": null,
+  "first_correct_after_audible_milliseconds": null,
+  "first_state_change_audio_seconds": null,
+  "state_changes": 0,
+  "final_chord_label": "N",
+  "compute_seconds": 2.6394277350000266,
+  "real_time_factor": 0.043990462250000445,
+  "chunk_compute_ms_p50": 0.9662090000119861,
+  "chunk_compute_ms_p95": 1.2564834499812605,
+  "chunk_compute_ms_max": 3.3579869999584844,
+  "p95_within_input_frame_deadline": true,
+  "runtime": {
+    "platform": "Linux-6.18.34+rpt-rpi-2712-aarch64-with-glibc2.41",
+    "python": "3.13.5",
+    "backend": "hailo",
+    "device": "hailo"
+  }
+}

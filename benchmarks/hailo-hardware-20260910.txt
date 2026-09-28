@@ -1,0 +1,7 @@
+Measurement power is not supported
+Measurement current is not supported
+
+Summary
+chordsense: FPS: 3249.86
+0001:01:00.0:
+  temperature: mean=52.79 min=48.80 max=53.65

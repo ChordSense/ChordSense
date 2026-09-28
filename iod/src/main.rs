@@ -31,7 +31,10 @@ fn main() {
     let sampler = AdcSampler::spawn(spi);
 
     let playback = match Playback::open(i2s_device_match.as_deref()) {
-        Ok(playback) => Some(playback),
+        Ok(playback) => {
+            println!("chordsense-iod: playback -> {}", playback.device_name());
+            Some(playback)
+        }
         Err(err) => {
             eprintln!("chordsense-iod: audio output unavailable; capture and streaming remain active: {err}");
             None

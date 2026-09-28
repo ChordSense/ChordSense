@@ -11,7 +11,7 @@ from flask import Flask, Response, jsonify, request
 from werkzeug.utils import secure_filename
 
 from iod_client import IodClient, IodError
-from web_upload import web_upload
+from web_upload import ALLOWED_AUDIO_EXTENSIONS, UPLOADS_DIR, web_upload
 
 from analysis_cache import (
     identify_audio,
@@ -553,6 +553,89 @@ def live_feedback_events():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+# -- playback: iod plays audio out of the I2S DAC to the pedal's headphone jack --
+
+def _iod_call(action):
+    try:
+        return jsonify({"success": True, **(action() or {})})
+    except IodError as e:
+        print(f"Playback command failed: {e}", flush=True)
+        return jsonify({"success": False, "error": str(e)}), 502
+
+
+def _resolve_playback_path(body: dict) -> Path:
+    """An uploaded song by name (``upload``) or a local file (``path``)."""
+    if body.get("upload"):
+        path = UPLOADS_DIR / secure_filename(body["upload"])
+    elif body.get("path"):
+        path = Path(body["path"]).expanduser().resolve()
+    else:
+        raise ValueError("Provide 'path' or 'upload'")
+    if path.suffix.lower() not in ALLOWED_AUDIO_EXTENSIONS:
+        raise ValueError(f"Unsupported audio type: {path.suffix}")
+    if not path.is_file():
+        raise ValueError(f"Audio file not found: {path}")
+    return path
+
+
+@app.post("/playback/load")
+def playback_load():
+    try:
+        path = _resolve_playback_path(request.get_json(silent=True) or {})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    return _iod_call(lambda: {"path": str(path), "duration": iod.load(path)})
+
+
+@app.post("/playback/play")
+def playback_play():
+    return _iod_call(iod.resume)
+
+
+@app.post("/playback/pause")
+def playback_pause():
+    return _iod_call(iod.pause)
+
+
+@app.post("/playback/stop")
+def playback_stop():
+    return _iod_call(iod.stop_playback)
+
+
+@app.post("/playback/seek")
+def playback_seek():
+    body = request.get_json(silent=True) or {}
+    try:
+        position = float(body["position_secs"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"success": False, "error": "position_secs is required"}), 400
+    return _iod_call(lambda: iod.seek(position))
+
+
+@app.post("/playback/volume")
+def playback_volume():
+    body = request.get_json(silent=True) or {}
+    try:
+        volume = float(body["volume"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"success": False, "error": "volume is required"}), 400
+    return _iod_call(lambda: iod.set_volume(volume))
+
+
+@app.get("/playback/status")
+def playback_status():
+    def status():
+        s = iod.status()
+        return {
+            "playing": s.get("playing", False),
+            "paused": s.get("paused", False),
+            "finished": s.get("finished", False),
+            "position": s.get("position_secs", 0.0),
+            "duration": s.get("duration_secs"),
+            "path": s.get("path"),
+            "output_device": s.get("output_device"),
+        }
+    return _iod_call(status)
 
 
 if __name__ == "__main__":

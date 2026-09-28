@@ -14,8 +14,6 @@ const state = {
 
     audioName: null,
 
-    audioObjectUrl: null,
-
     loading: false,
     analyzing: false,
 
@@ -31,7 +29,143 @@ const state = {
     isChordTransitioning: false,
 };
 
-const audio = document.querySelector("#audio-player");
+/*
+ * Audio plays in iod, out of the pedal's headphone jack (I2S DAC), not in
+ * this window. `player` mirrors the parts of an <audio> element this file
+ * uses (paused / currentTime / duration), so chord sync reads iod's clock:
+ * position is polled from the backend and interpolated between polls.
+ */
+const STATUS_POLL_MS = 250;
+
+const player = {
+    loaded: false,
+    paused: true,
+    duration: NaN,
+
+    // bumped by every command so a status poll that was already in flight
+    // can't undo it (e.g. report "paused" just after Play was pressed)
+    generation: 0,
+
+    // last position iod reported, and when (performance.now()) we got it
+    basePosition: 0,
+    baseTime: 0,
+
+    get currentTime() {
+        if (this.paused) {
+            return this.basePosition;
+        }
+
+        const elapsed =
+            (performance.now() - this.baseTime) / 1000;
+
+        const position =
+            this.basePosition + elapsed;
+
+        return Number.isFinite(this.duration)
+            ? Math.min(position, this.duration)
+            : position;
+    },
+
+    setPosition(position) {
+        this.basePosition = position;
+        this.baseTime = performance.now();
+    }
+};
+
+function playbackCommand(action, body = null) {
+    player.generation += 1;
+
+    return invoke(
+        "playback_command",
+        {
+            action,
+            body
+        }
+    );
+}
+
+/*
+ * source is {path} for a local file / recorded take,
+ * or {upload} for a song in the backend's uploads.
+ */
+async function loadPlayback(source) {
+    const result =
+        await playbackCommand(
+            "load",
+            source
+        );
+
+    player.loaded = true;
+    player.paused = true;
+    player.duration =
+        result.duration ?? NaN;
+    player.setPosition(0);
+
+    await playbackCommand(
+        "volume",
+        {
+            volume:
+                Number(volumeSlider.value)
+        }
+    );
+}
+
+async function syncPlaybackStatus() {
+    if (
+        !player.loaded ||
+        seekSlider.matches(":active")
+    ) {
+        return;
+    }
+
+    const generation =
+        player.generation;
+
+    let result;
+
+    try {
+        result =
+            await invoke("playback_status");
+    } catch (error) {
+        console.error(
+            "Playback status failed:",
+            error
+        );
+        return;
+    }
+
+    if (generation !== player.generation) {
+        return;
+    }
+
+    if (Number.isFinite(result.duration)) {
+        player.duration = result.duration;
+    }
+
+    const wasPaused = player.paused;
+
+    player.paused = !result.playing;
+    player.setPosition(
+        result.position ?? 0
+    );
+
+    if (result.finished) {
+        if (feedback.phase !== "idle") stopFeedback();
+    } else if (wasPaused !== player.paused) {
+        if (player.paused) pauseFeedback();
+        else if (feedback.enabled) void ensureFeedbackReady();
+    }
+
+    if (wasPaused !== player.paused) {
+        updatePlayerUI();
+        updateChordDisplay();
+    }
+}
+
+setInterval(
+    syncPlaybackStatus,
+    STATUS_POLL_MS
+);
 
 const loadButton = document.querySelector("#load-audio");
 const audioLibraryModal = document.querySelector("#audio-library-modal");
@@ -193,7 +327,7 @@ const feedbackListenerReady = window.__TAURI__.event.listen(
             }
             return;
         }
-        if (payload.type !== "prediction" || feedback.phase !== "running" || audio.paused) return;
+        if (payload.type !== "prediction" || feedback.phase !== "running" || player.paused) return;
         if (payload.input_quality !== "ok") {
             clearFeedbackEvaluation();
             setFeedbackStatus(payload.input_quality === "clipping"
@@ -210,7 +344,7 @@ const feedbackListenerReady = window.__TAURI__.event.listen(
         const result = feedback.rater?.observe({
             sessionId: feedback.sessionId,
             sequence: payload.sequence,
-            playbackTimeSeconds: audio.currentTime,
+            playbackTimeSeconds: player.currentTime,
             sampleAgeMs: totalAge,
             chord: payload.chord,
             inputQuality: payload.input_quality,
@@ -277,8 +411,8 @@ async function ensureFeedbackReady() {
 }
 
 function advanceFeedback() {
-    if (feedback.phase !== "running" || audio.paused) return;
-    const rating = feedback.rater?.advance(audio.currentTime).rating ?? null;
+    if (feedback.phase !== "running" || player.paused) return;
+    const rating = feedback.rater?.advance(player.currentTime).rating ?? null;
     if (rating !== feedback.displayedRating) {
         renderFeedbackRating(rating);
         if (!rating) setFeedbackStatus("Listening for your guitar…");
@@ -291,7 +425,7 @@ feedbackToggle.addEventListener("click", () => {
     feedbackToggle.textContent = feedback.enabled
         ? "Live Feedback: On" : "Live Feedback: Off";
     if (feedback.enabled) {
-        if (!audio.paused) void ensureFeedbackReady();
+        if (!player.paused) void ensureFeedbackReady();
         else setFeedbackStatus(state.chords.length
             ? "Live feedback ready." : "Analyze the track before live feedback.");
     } else {
@@ -756,36 +890,27 @@ function closeAudioLibrary() {
     loadButton.focus();
 }
 
-function clearAudioSource() {
+async function clearAudioSource() {
+    const feedbackStopped = stopFeedback();
+    const playbackStopped = player.loaded
+        ? playbackCommand("stop")
+        : Promise.resolve();
 
-    stopFeedback();
+    player.loaded = false;
+    player.paused = true;
+    player.duration = NaN;
+    player.setPosition(0);
 
-    audio.pause();
-
-    audio.removeAttribute("src");
-
-    audio.load();
-
-
-    if (state.audioObjectUrl) {
-
-        URL.revokeObjectURL(
-            state.audioObjectUrl
-        );
-
-        state.audioObjectUrl =
-            null;
-    }
+    await Promise.all([feedbackStopped, playbackStopped]);
 }
 
-function applyLoadedAudio({
+async function applyLoadedAudio({
     name,
-    bytes,
     localPath = null,
     uploadedFileName = null
 }) {
 
-    clearAudioSource();
+    await clearAudioSource();
 
 
     state.audioPath =
@@ -830,33 +955,11 @@ function applyLoadedAudio({
     );
 
 
-    const audioBlob =
-        new Blob(
-            [
-                new Uint8Array(
-                    bytes
-                )
-            ],
-            {
-                type:
-                    getAudioMimeType(
-                        name
-                    )
-            }
-        );
-
-
-    state.audioObjectUrl =
-        URL.createObjectURL(
-            audioBlob
-        );
-
-
-    audio.src =
-        state.audioObjectUrl;
-
-
-    audio.load();
+    await loadPlayback(
+        localPath
+            ? { path: localPath }
+            : { upload: uploadedFileName }
+    );
 
     updatePlayerUI();
 }
@@ -1156,7 +1259,7 @@ function updateChordDisplay() {
         return;
     }
 
-    const time = audio.currentTime || 0;
+    const time = player.currentTime || 0;
 
     const {
         index,
@@ -1255,29 +1358,8 @@ function renderChordSet(previous, current, next, incoming) {
     displayChord(incoming, incomingImage, incomingLabel);
 }
 
-function getAudioMimeType(path) {
-
-    const lower = path.toLowerCase();
-    if (lower.endsWith(".mp3")) {
-        return "audio/mpeg";
-    }
-    if (lower.endsWith(".wav")) {
-        return "audio/wav";
-    }
-    if (lower.endsWith(".ogg")) {
-        return "audio/ogg";
-    }
-    if (lower.endsWith(".flac")) {
-        return "audio/flac";
-    }
-    if (lower.endsWith(".m4a")) {
-        return "audio/mp4";
-    }
-    return "application/octet-stream";
-}
-
 function updateControls() {
-    const hasAudio = Boolean(audio.getAttribute("src"));
+    const hasAudio = player.loaded;
     const canAnalyze = Boolean(state.audioPath || state.uploadedFileName);
     loadButton.disabled = state.loading || state.analyzing;
     analyzeButton.disabled = !canAnalyze || state.loading || state.analyzing;
@@ -1319,18 +1401,9 @@ async function browseLocalAudio() {
     updateControls();
     status.textContent = "Loading audio...";
     try {
-        const audioBytes =
-            await invoke(
-                "load_audio_file",
-                {
-                    path: selected
-                }
-            );
         const name = selected.replaceAll("\\", "/").split("/").pop();
-        applyLoadedAudio({
+        await applyLoadedAudio({
             name,
-            bytes:
-                audioBytes,
 
             localPath:
                 selected,
@@ -1367,22 +1440,9 @@ async function loadSelectedLibrarySong() {
     updateControls();
     audioLibraryStatus.textContent = `Loading ${song.name}...`;
     try {
-        const audioBytes =
-            await invoke(
-                "load_uploaded_audio",
-                {
-                    filename:
-                        song.name
-                }
-            );
-
-
-        applyLoadedAudio({
+        await applyLoadedAudio({
             name:
                 song.name,
-
-            bytes:
-                audioBytes,
 
             localPath:
                 null,
@@ -1476,7 +1536,7 @@ async function analyzeAudio() {
                 `Loaded saved analysis. ` +
                 `${state.chords.length} chords found.`;
 
-            if (feedback.enabled && !audio.paused) void ensureFeedbackReady();
+            if (feedback.enabled && !player.paused) void ensureFeedbackReady();
 
         } else {
 
@@ -1511,21 +1571,20 @@ async function analyzeAudio() {
 
 async function togglePlayback() {
 
-    /*
-     * Playback depends on whether the audio
-     * element has a source, not whether that
-     * source came from a local filesystem path.
-     */
-    if (!audio.getAttribute("src")) {
+    if (!player.loaded) {
         status.textContent = "Load an audio file before starting playback.";
         return;
     }
 
-    if (audio.paused) {
+    if (player.paused) {
         try {
             if (feedback.enabled) await ensureFeedbackReady();
 
-            await audio.play();
+            await playbackCommand("play");
+
+            const position = player.currentTime;
+            player.paused = false;
+            player.setPosition(position);
         } catch (error) {
             console.error("Playback failed:", error);
             status.textContent = `Playback failed: ${error}`;
@@ -1533,34 +1592,86 @@ async function togglePlayback() {
         }
 
     } else {
-        audio.pause();
+        const position =
+            player.currentTime;
+
+        player.paused = true;
+        player.setPosition(position);
+        pauseFeedback();
+
+        try {
+            await playbackCommand("pause");
+        } catch (error) {
+            console.error(error);
+            status.textContent =
+                `Pause failed: ${error}`;
+        }
     }
+
+    updatePlayerUI();
 }
 
 export function stopPlayback() {
-    const stopped = stopFeedback();
-    audio.pause();
-    audio.currentTime = 0;
+    const feedbackStopped = stopFeedback();
+    const playbackStopped = player.loaded
+        ? playbackCommand("stop").catch(console.error)
+        : Promise.resolve();
+
+    player.paused = true;
+    player.setPosition(0);
 
     updatePlayerUI();
     updateChordDisplay();
-    return stopped;
+    return Promise.all([feedbackStopped, playbackStopped]);
 }
 
 function setVolume() {
-    audio.volume =
-        Number(volumeSlider.value);
+    if (!player.loaded) {
+        return;
+    }
+
+    playbackCommand(
+        "volume",
+        {
+            volume:
+                Number(volumeSlider.value)
+        }
+    ).catch(console.error);
 }
 
-// for using slider in the playback
+// while dragging: move the display only
+function previewSeek() {
+    player.setPosition(
+        Number(seekSlider.value)
+    );
+
+    state.lastActiveChordIndex = null;
+
+    updatePlayerUI();
+    updateChordDisplay();
+}
+
+// on release: actually move iod's playback position
 function seekAudio() {
-    audio.currentTime =
+    const position =
         Number(seekSlider.value);
 
+    player.setPosition(position);
     clearFeedbackEvaluation();
     if (feedback.enabled && feedback.phase === "running") {
         setFeedbackStatus("Listening for your guitar…");
     }
+
+    playbackCommand(
+        "seek",
+        {
+            position_secs: position
+        }
+    ).catch(error => {
+        console.error(error);
+        status.textContent =
+            `Seek failed: ${error}`;
+    });
 
     state.lastActiveChordIndex = null;
 
@@ -1570,8 +1681,8 @@ function seekAudio() {
 
 function getDuration() {
     const audioDuration =
-        Number.isFinite(audio.duration)
-            ? audio.duration
+        Number.isFinite(player.duration)
+            ? player.duration
             : 0;
 
     return Math.max(
@@ -1589,21 +1700,21 @@ function updatePlayerUI() {
 
     if (!seekSlider.matches(":active")) {
         seekSlider.value =
-            audio.currentTime || 0;
+            player.currentTime || 0;
     }
 
     timeDisplay.textContent =
-        `${formatTime(audio.currentTime)} / ` +
+        `${formatTime(player.currentTime)} / ` +
         `${formatTime(duration)}`;
 
     playPauseImage.src =
-        audio.paused
+        player.paused
             ? "assets/icons/play-button.png"
             : "assets/icons/pause.png";
 
     playPauseButton.setAttribute(
         "aria-label",
-        audio.paused ? "Play" : "Pause"
+        player.paused ? "Play" : "Pause"
     );
 
     updateControls();
@@ -1633,53 +1744,8 @@ function formatTime(seconds) {
     );
 }
 
-audio.addEventListener(
-    "timeupdate",
-    () => {
-        updatePlayerUI();
-        updateChordDisplay();
-    }
-);
-
-audio.addEventListener(
-    "loadedmetadata",
-    updatePlayerUI
-);
-
-audio.addEventListener(
-    "play",
-    () => {
-        updatePlayerUI();
-        if (feedback.enabled && feedback.phase === "idle") void ensureFeedbackReady();
-    }
-);
-
-audio.addEventListener(
-    "pause",
-    () => {
-        updatePlayerUI();
-        pauseFeedback();
-    }
-);
-
-audio.addEventListener("seeked", () => {
-    clearFeedbackEvaluation();
-    if (feedback.enabled && feedback.phase === "running") {
-        setFeedbackStatus("Listening for your guitar…");
-    }
-});
-
-audio.addEventListener(
-    "ended",
-    () => {
-        stopFeedback();
-        updatePlayerUI();
-        updateChordDisplay();
-    }
-);
-
 function playbackLoop() {
-    if (!audio.paused) {
+    if (!player.paused) {
         updatePlayerUI();
         updateChordDisplay();
         advanceFeedback();
@@ -1721,11 +1787,15 @@ volumeSlider.addEventListener(
 
 seekSlider.addEventListener(
     "input",
-    seekAudio
+    previewSeek
 );
 updateCapoControls();
 clearCapoRecommendation();
-audio.volume = Number(volumeSlider.value);
+
+seekSlider.addEventListener(
+    "change",
+    seekAudio
+);
 
 updatePlayerUI();
 
@@ -1734,7 +1804,7 @@ export async function loadRecordedAnalysis(result) {
     /*
      * Stop any previously loaded song.
      */
-    clearAudioSource();
+    await clearAudioSource();
 
 
     state.audioPath = null;
@@ -1799,32 +1869,13 @@ export async function loadRecordedAnalysis(result) {
 
         try {
 
-            const audioBytes = await invoke(
-                "load_audio_file",
-                {
-                    path: wavPath
-                }
-            );
-
-            const audioBlob = new Blob(
-                [new Uint8Array(audioBytes)],
-                {
-                    type: getAudioMimeType(wavPath)
-                }
-            );
-
-            state.audioObjectUrl =
-                URL.createObjectURL(audioBlob);
-
-            audio.src =
-                state.audioObjectUrl;
-
-            audio.load();
+            await loadPlayback({
+                path: wavPath
+            });
 
             /*
-             * Setting this is what re-enables the transport
-             * controls: play/pause, stop and seek all bail
-             * out while audioPath is null.
+             * Also lets Analyze re-run the take through the
+             * Sense-mode model.
              */
             state.audioPath = wavPath;
 

@@ -16,7 +16,7 @@
 #   CHORDSENSE_IOD_SOCKET        control socket path
 #   CHORDSENSE_CAPTURES_DIR      where captured WAVs are written
 #   CHORDSENSE_SPI_DEVICE        spidev node (default /dev/spidev0.0)
-#   CHORDSENSE_I2S_DEVICE_MATCH  ALSA output-name substring for the PCM5102A
+#   CHORDSENSE_I2S_DEVICE_MATCH  ALSA output substring for the PCM5102A (default hifiberry)
 
 set -euo pipefail
 
@@ -26,6 +26,8 @@ repo_root="$(cd "$here/.." && pwd)"
 export CHORDSENSE_IOD_SOCKET="${CHORDSENSE_IOD_SOCKET:-${XDG_RUNTIME_DIR:-/tmp}/chordsense-iod.sock}"
 export CHORDSENSE_CAPTURES_DIR="${CHORDSENSE_CAPTURES_DIR:-$repo_root/runtime/captures}"
 export CHORDSENSE_SPI_DEVICE="${CHORDSENSE_SPI_DEVICE:-/dev/spidev0.0}"
+# dtoverlay=hifiberry-dac registers the PCM5102A as card "sndrpihifiberry"
+export CHORDSENSE_I2S_DEVICE_MATCH="${CHORDSENSE_I2S_DEVICE_MATCH:-hifiberry}"
 
 bin="$here/target/release/chordsense-iod"
 if [[ ! -x "$bin" ]]; then
@@ -39,6 +41,7 @@ echo "chordsense-iod"
 echo "  socket:   $CHORDSENSE_IOD_SOCKET"
 echo "  captures: $CHORDSENSE_CAPTURES_DIR"
 echo "  spi:      $CHORDSENSE_SPI_DEVICE"
+echo "  audio:    $CHORDSENSE_I2S_DEVICE_MATCH"
 echo
 
 exec "$bin"
