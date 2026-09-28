@@ -1,11 +1,13 @@
 import atexit
+import json
 import os
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 import time
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 from werkzeug.utils import secure_filename
 
 from iod_client import IodClient, IodError
@@ -42,6 +44,8 @@ app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
 iod = IodClient()
 recording_recognizer = None
+live_feedback_session = None
+live_feedback_session_lock = threading.Lock()
 
 
 def get_recording_recognizer():
@@ -63,6 +67,22 @@ def get_recording_recognizer():
 def close_recording_recognizer():
     if recording_recognizer is not None:
         recording_recognizer.close()
+
+
+def get_live_feedback_session():
+    global live_feedback_session
+    with live_feedback_session_lock:
+        if live_feedback_session is None:
+            from live_feedback_session import LiveFeedbackSession
+
+            live_feedback_session = LiveFeedbackSession(iod=iod)
+    return live_feedback_session
+
+
+@atexit.register
+def close_live_feedback_session():
+    if live_feedback_session is not None:
+        live_feedback_session.stop()
 
 
 def parse_lab_file(lab_path: Path):
@@ -395,7 +415,8 @@ def begin_recording():
         })
     except IodError as e:
         print(f"Begin recording failed: {e}", flush=True)
-        return jsonify({"success": False, "error": str(e)}), 502
+        status = 409 if "stream" in str(e).lower() else 502
+        return jsonify({"success": False, "error": str(e)}), status
     except Exception as e:
         print(f"Begin recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
@@ -447,6 +468,91 @@ def end_recording():
     except Exception as e:
         print(f"End recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.post("/feedback/start")
+def start_live_feedback():
+    from live_feedback_session import FeedbackBusyError
+
+    try:
+        return jsonify({"success": True, **get_live_feedback_session().start()}), 201
+    except FeedbackBusyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 503
+
+
+@app.post("/feedback/pause")
+def pause_live_feedback():
+    from live_feedback_session import FeedbackStateError
+
+    try:
+        return jsonify({"success": True, **get_live_feedback_session().pause()})
+    except FeedbackStateError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+
+
+@app.post("/feedback/resume")
+def resume_live_feedback():
+    from live_feedback_session import FeedbackStateError
+
+    try:
+        return jsonify({"success": True, **get_live_feedback_session().resume()})
+    except FeedbackStateError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+    except IodError as exc:
+        status = 409 if "captur" in str(exc).lower() else 502
+        return jsonify({"success": False, "error": str(exc)}), status
+
+
+@app.post("/feedback/stop")
+def stop_live_feedback():
+    try:
+        return jsonify({"success": True, **get_live_feedback_session().stop()})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.get("/feedback/status")
+def live_feedback_status():
+    return jsonify({"success": True, **get_live_feedback_session().status()})
+
+
+@app.get("/feedback/events")
+def live_feedback_events():
+    from live_feedback_session import FeedbackStateError
+
+    session = get_live_feedback_session()
+    session_id = request.args.get("session_id", "")
+    try:
+        after = max(0, int(request.args.get("after", "0")))
+    except ValueError:
+        return jsonify({"success": False, "error": "invalid after sequence"}), 400
+    if session_id != session.status()["session_id"]:
+        return jsonify({"success": False, "error": "unknown feedback session"}), 404
+
+    def generate():
+        sequence = after
+        while True:
+            try:
+                event = session.wait_event(session_id, sequence)
+            except FeedbackStateError:
+                break
+            if event is None:
+                yield ": keepalive\n\n"
+                if session.status()["state"] == "idle":
+                    break
+                continue
+            sequence = event["sequence"]
+            yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+            if event.get("status") in {"stopped", "error"}:
+                break
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":

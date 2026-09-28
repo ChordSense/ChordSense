@@ -102,6 +102,7 @@ impl Response {
 #[derive(Serialize)]
 struct StreamFrameMsg {
     sample_index: u64,
+    captured_at_ns: u64,
     playback_position_secs: f64,
     /// base64-encoded little-endian pcm16 samples
     samples: String,
@@ -109,12 +110,12 @@ struct StreamFrameMsg {
 
 pub struct Daemon {
     sampler: AdcSampler,
-    playback: Arc<Mutex<Playback>>,
+    playback: Arc<Mutex<Option<Playback>>>,
     captures_dir: PathBuf,
 }
 
 impl Daemon {
-    pub fn new(sampler: AdcSampler, playback: Playback, captures_dir: PathBuf) -> Self {
+    pub fn new(sampler: AdcSampler, playback: Option<Playback>, captures_dir: PathBuf) -> Self {
         Self {
             sampler,
             playback: Arc::new(Mutex::new(playback)),
@@ -204,9 +205,11 @@ impl Daemon {
     /// disconnects (write fails) or the channel is torn down
     fn forward_stream(&self, writer: &mut UnixStream, rx: Receiver<SampleFrame>) {
         while let Ok(frame) = rx.recv() {
-            let playback_position_secs = self.playback.lock().unwrap().position_secs();
+            let playback_position_secs = self.playback.lock().unwrap().as_ref()
+                .map(Playback::position_secs).unwrap_or(0.0);
             let msg = StreamFrameMsg {
                 sample_index: frame.sample_index,
+                captured_at_ns: frame.captured_at_ns,
                 playback_position_secs,
                 samples: BASE64.encode(pcm16_to_bytes(&frame.samples)),
             };
@@ -240,6 +243,9 @@ impl Daemon {
             },
             Command::Play { path } => {
                 let mut playback = self.playback.lock().unwrap();
+                let Some(playback) = playback.as_mut() else {
+                    return Response::err("audio output is unavailable");
+                };
                 match playback.load(&path) {
                     Ok(()) => {
                         playback.play();
@@ -249,26 +255,38 @@ impl Daemon {
                 }
             }
             Command::Pause => {
-                self.playback.lock().unwrap().pause();
-                Response::ok()
+                match self.playback.lock().unwrap().as_mut() {
+                    Some(playback) => { playback.pause(); Response::ok() }
+                    None => Response::err("audio output is unavailable"),
+                }
             }
             Command::Resume => {
-                self.playback.lock().unwrap().play();
-                Response::ok()
+                match self.playback.lock().unwrap().as_mut() {
+                    Some(playback) => { playback.play(); Response::ok() }
+                    None => Response::err("audio output is unavailable"),
+                }
             }
-            Command::StopPlayback => match self.playback.lock().unwrap().stop() {
-                Ok(()) => Response::ok(),
-                Err(err) => Response::err(err),
-            },
-            Command::Seek { position_secs } => {
-                match self.playback.lock().unwrap().seek(position_secs) {
+            Command::StopPlayback => match self.playback.lock().unwrap().as_mut() {
+                Some(playback) => match playback.stop() {
                     Ok(()) => Response::ok(),
                     Err(err) => Response::err(err),
+                },
+                None => Response::err("audio output is unavailable"),
+            },
+            Command::Seek { position_secs } => {
+                match self.playback.lock().unwrap().as_mut() {
+                    Some(playback) => match playback.seek(position_secs) {
+                        Ok(()) => Response::ok(),
+                        Err(err) => Response::err(err),
+                    },
+                    None => Response::err("audio output is unavailable"),
                 }
             }
             Command::SetVolume { volume } => {
-                self.playback.lock().unwrap().set_volume(volume);
-                Response::ok()
+                match self.playback.lock().unwrap().as_mut() {
+                    Some(playback) => { playback.set_volume(volume); Response::ok() }
+                    None => Response::err("audio output is unavailable"),
+                }
             }
             Command::Status => {
                 let playback = self.playback.lock().unwrap();
@@ -276,10 +294,10 @@ impl Daemon {
                     capturing: Some(self.sampler.is_capturing()),
                     streaming: Some(self.sampler.is_streaming()),
                     stream_subscribers: Some(self.sampler.stream_subscriber_count() as u32),
-                    playing: Some(!playback.is_paused() && !playback.is_finished()),
-                    paused: Some(playback.is_paused()),
-                    position_secs: Some(playback.position_secs()),
-                    duration_secs: playback.duration_secs(),
+                    playing: Some(playback.as_ref().is_some_and(|p| !p.is_paused() && !p.is_finished())),
+                    paused: Some(playback.as_ref().is_some_and(Playback::is_paused)),
+                    position_secs: Some(playback.as_ref().map(Playback::position_secs).unwrap_or(0.0)),
+                    duration_secs: playback.as_ref().and_then(Playback::duration_secs),
                     ..Response::ok()
                 }
             }
@@ -310,4 +328,3 @@ fn pcm16_to_bytes(samples: &[i16]) -> Vec<u8> {
     }
     bytes
 }
-

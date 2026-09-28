@@ -191,9 +191,10 @@ Successful boot transitions to `PLAY_BROWSE`.
 
 Live Feedback comparison contract:
 
-- detected chord equals normalized expected chord: green overlay;
-- detected chord differs: red overlay;
-- no reliable detection: neutral/gray state, not an incorrect result; and
+- a sustained, reliable major/minor chord equals the normalized expected chord: a very transparent green full-screen overlay and a matching badge;
+- the detected root matches but quality differs, or the expected chord includes a seventh that the current model cannot verify: yellow badge;
+- a sustained, reliable different root: red badge;
+- no reliable detection, input clipping, silence, startup warmup, or stale audio: neutral state without an overlay; and
 - rhythm, onset timing, voicing quality, and fingering quality are outside the MVP.
 
 ### Connectivity and synchronization states
@@ -289,7 +290,7 @@ A stable-state Power press enters `SHUTTING_DOWN`. A Power press in a locked sta
 4. A supported song can be imported over Wi-Fi or from USB.
 5. An unanalyzed song cannot enter playback until analysis and local tab save succeed.
 6. Playback keeps the tab synchronized through play, pause, stop, and seek.
-7. Live Feedback distinguishes correct, incorrect, and no-detection results without timing evaluation.
+7. Live Feedback distinguishes matching, partial, different, and no-detection results without timing evaluation.
 8. Headphone insertion automatically mutes the 6.35 mm output.
 9. Mode switching is rejected in every locked state.
 10. Six selected songs plus the most recent unpinned song remain available offline, subject to unsynchronized-data protections.

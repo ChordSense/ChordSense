@@ -230,11 +230,13 @@ class HailoInferenceBackend:
         # ChordSense builds NCHW windows; Hailo vstreams consume NHWC buffers.
         self._hailo_input[...] = values[0].transpose(1, 2, 0)
         self._configured_model.run([self._bindings], 10_000)
+        # HailoRT reuses this output buffer on the next run. Return an owned
+        # snapshot so callers can safely retain predictions for comparison.
         return _validate_logits(
             self._hailo_output,
             values.shape[0],
             self.class_count,
-        )
+        ).copy()
 
     def close(self) -> None:
         if not self._closed:

@@ -39,6 +39,8 @@ pub struct CaptureResult {
 pub struct SampleFrame {
     /// sampling-loop index of the first sample in this frame
     pub sample_index: u64,
+    /// CLOCK_MONOTONIC time when the final sample became available
+    pub captured_at_ns: u64,
     pub samples: Vec<i16>,
 }
 
@@ -335,6 +337,7 @@ fn sampling_loop(spi: Mcp3201, mode: Arc<Mutex<Mode>>, running: Arc<AtomicBool>)
                         if sub.buffer.len() >= sub.frame_samples {
                             let frame = SampleFrame {
                                 sample_index: sub.buffer_start_index,
+                                captured_at_ns: monotonic_ns(),
                                 samples: std::mem::take(&mut sub.buffer),
                             };
                             // drop-newest-on-full: a slow reader loses the odd
@@ -349,6 +352,15 @@ fn sampling_loop(spi: Mcp3201, mode: Arc<Mutex<Mode>>, running: Arc<AtomicBool>)
             }
         }
     }
+}
+
+fn monotonic_ns() -> u64 {
+    let mut value = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) };
+    if result != 0 {
+        return 0;
+    }
+    (value.tv_sec as u64) * 1_000_000_000 + value.tv_nsec as u64
 }
 
 /// asks the kernel for SCHED_FIFO to stop scheduling jitter for sampling

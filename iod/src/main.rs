@@ -30,10 +30,13 @@ fn main() {
     });
     let sampler = AdcSampler::spawn(spi);
 
-    let playback = Playback::open(i2s_device_match.as_deref()).unwrap_or_else(|err| {
-        eprintln!("chordsense-iod: failed to open I2S/DAC output: {err}");
-        std::process::exit(1);
-    });
+    let playback = match Playback::open(i2s_device_match.as_deref()) {
+        Ok(playback) => Some(playback),
+        Err(err) => {
+            eprintln!("chordsense-iod: audio output unavailable; capture and streaming remain active: {err}");
+            None
+        }
+    };
 
     println!(
         "chordsense-iod: SPI sampling from {spi_device} at {} Hz, captures -> {}, listening on {socket_path}",
