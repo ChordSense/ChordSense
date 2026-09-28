@@ -2,6 +2,8 @@ import {
     chordForCapo,
     recommendCapo
 } from "./capo.js";
+import { FeedbackRater } from "./feedback-rating.js";
+
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
 
@@ -73,6 +75,231 @@ const songName =
 
 const status =
     document.querySelector("#status");
+
+const feedbackToggle = document.querySelector("#live-feedback-toggle");
+const feedbackStatus = document.querySelector("#feedback-status");
+const feedbackRating = document.querySelector("#feedback-rating");
+const feedbackOverlay = document.querySelector("#feedback-screen-overlay");
+
+const feedback = {
+    enabled: false,
+    phase: "idle",
+    backendOwned: false,
+    sessionId: null,
+    generation: null,
+    rater: null,
+    epoch: 0,
+    cutoffUnixMs: 0,
+    queue: Promise.resolve(),
+    pending: null,
+    displayedRating: null,
+};
+
+function setFeedbackStatus(message) {
+    if (feedbackStatus.textContent !== message) feedbackStatus.textContent = message;
+}
+
+function renderFeedbackRating(rating) {
+    if (feedback.displayedRating === rating) return;
+    feedback.displayedRating = rating;
+    feedbackOverlay.classList.toggle("visible", rating === "green");
+    feedbackRating.classList.toggle("hidden", !rating);
+    if (rating) {
+        feedbackRating.dataset.rating = rating;
+        feedbackRating.textContent = {
+            green: "Chord match",
+            yellow: "Same root · check quality",
+            red: "Different chord",
+        }[rating];
+        setFeedbackStatus(feedbackRating.textContent);
+    } else {
+        delete feedbackRating.dataset.rating;
+        feedbackRating.textContent = "";
+    }
+}
+
+function clearFeedbackEvaluation() {
+    feedback.cutoffUnixMs = Date.now();
+    feedback.rater?.reset(feedback.sessionId);
+    renderFeedbackRating(null);
+}
+
+function queueFeedback(action) {
+    const task = feedback.queue.then(action);
+    feedback.queue = task.catch(() => {});
+    return task;
+}
+
+function stopFeedback() {
+    const wasActive = feedback.phase !== "idle" ||
+        feedback.sessionId !== null || feedback.backendOwned;
+    feedback.epoch += 1;
+    feedback.phase = "idle";
+    feedback.sessionId = null;
+    feedback.generation = null;
+    feedback.rater = null;
+    clearFeedbackEvaluation();
+    let pending = feedback.queue;
+    if (wasActive) {
+        pending = queueFeedback(async () => {
+            if (!feedback.backendOwned) return;
+            await invoke("stop_live_feedback");
+            feedback.backendOwned = false;
+        }).catch(error => {
+            console.error("Could not stop live feedback:", error);
+            setFeedbackStatus(`Could not stop live feedback: ${error}`);
+        });
+    }
+    setFeedbackStatus(feedback.enabled ? "Live feedback ready." : "Live feedback off.");
+    return pending;
+}
+
+function pauseFeedback() {
+    if (feedback.phase !== "running") return;
+    const token = ++feedback.epoch;
+    feedback.phase = "paused";
+    clearFeedbackEvaluation();
+    setFeedbackStatus("Live feedback paused.");
+    void queueFeedback(() => invoke("pause_live_feedback")).catch(error => {
+        if (feedback.epoch !== token) return;
+        console.error("Could not pause live feedback:", error);
+        stopFeedback();
+        setFeedbackStatus(`Live feedback error: ${error}`);
+    });
+}
+
+const feedbackListenerReady = window.__TAURI__.event.listen(
+    "live-feedback-event",
+    ({ payload }) => {
+        if (!feedback.enabled || payload.session_id !== feedback.sessionId) return;
+        if (payload.generation != null && payload.generation !== feedback.generation) return;
+        if (payload.type === "status") {
+            const messages = {
+                warming_up: "Listening for your guitar…",
+                silence: "No guitar signal detected.",
+                stream_gap: "Audio stream interrupted; listening again…",
+                disconnected: "Live feedback disconnected; reconnecting…",
+                paused: "Live feedback paused.",
+            };
+            if (payload.status === "stopped" || payload.status === "error") {
+                const message = payload.error || "Live feedback stopped.";
+                stopFeedback();
+                setFeedbackStatus(message);
+                return;
+            }
+            if (messages[payload.status]) {
+                if (payload.status !== "paused") clearFeedbackEvaluation();
+                setFeedbackStatus(messages[payload.status]);
+            }
+            return;
+        }
+        if (payload.type !== "prediction" || feedback.phase !== "running" || audio.paused) return;
+        if (payload.input_quality !== "ok") {
+            clearFeedbackEvaluation();
+            setFeedbackStatus(payload.input_quality === "clipping"
+                ? "Guitar input is clipping; check the input signal and level."
+                : "Waiting for a clear guitar signal…");
+            return;
+        }
+        const sampleAge = payload.sample_age_ms;
+        const emittedAt = payload.emitted_at_unix_ms;
+        if (typeof sampleAge !== "number" || typeof emittedAt !== "number") return;
+        const totalAge = sampleAge + Math.max(0, Date.now() - emittedAt);
+        if (!Number.isFinite(totalAge) ||
+            emittedAt - sampleAge < feedback.cutoffUnixMs) return;
+        const result = feedback.rater?.observe({
+            sessionId: feedback.sessionId,
+            sequence: payload.sequence,
+            playbackTimeSeconds: audio.currentTime,
+            sampleAgeMs: totalAge,
+            chord: payload.chord,
+            inputQuality: payload.input_quality,
+            confidence: payload.confidence,
+        });
+        renderFeedbackRating(result?.rating ?? null);
+        if (!result?.rating && feedbackStatus.textContent !== "Listening for your guitar…") {
+            setFeedbackStatus("Listening for your guitar…");
+        }
+    }
+);
+
+async function ensureFeedbackReady() {
+    if (!feedback.enabled || !state.chords.length) {
+        if (feedback.enabled) setFeedbackStatus("Analyze the track before live feedback.");
+        return;
+    }
+    if (feedback.phase === "running") return;
+    if (feedback.phase === "starting") return feedback.pending;
+    const resuming = feedback.phase === "paused" && feedback.sessionId !== null;
+    const token = ++feedback.epoch;
+    feedback.phase = "starting";
+    clearFeedbackEvaluation();
+    setFeedbackStatus(resuming ? "Resuming live feedback…" : "Starting live feedback…");
+    const task = queueFeedback(async () => {
+        try {
+            await feedbackListenerReady;
+            if (feedback.epoch !== token) return;
+            if (!resuming && feedback.backendOwned) {
+                await invoke("stop_live_feedback");
+                feedback.backendOwned = false;
+            }
+            const response = await invoke(resuming
+                ? "resume_live_feedback" : "start_live_feedback");
+            feedback.backendOwned = true;
+            if (feedback.epoch !== token) return;
+            feedback.sessionId = response.session_id;
+            feedback.generation = response.generation;
+            feedback.rater = new FeedbackRater(state.chords);
+            feedback.rater.reset(feedback.sessionId);
+            feedback.phase = "running";
+            feedback.cutoffUnixMs = Date.now();
+            setFeedbackStatus("Listening for your guitar…");
+        } catch (error) {
+            if (feedback.epoch !== token) return;
+            console.error("Could not start live feedback:", error);
+            if (resuming) {
+                try {
+                    await invoke("stop_live_feedback");
+                    feedback.backendOwned = false;
+                } catch (stopError) {
+                    console.error("Could not release live feedback:", stopError);
+                }
+            }
+            feedback.phase = "idle";
+            feedback.sessionId = null;
+            feedback.rater = null;
+            setFeedbackStatus(`Live feedback unavailable: ${error}`);
+        }
+    });
+    feedback.pending = task;
+    await task;
+    if (feedback.pending === task) feedback.pending = null;
+}
+
+function advanceFeedback() {
+    if (feedback.phase !== "running" || audio.paused) return;
+    const rating = feedback.rater?.advance(audio.currentTime).rating ?? null;
+    if (rating !== feedback.displayedRating) {
+        renderFeedbackRating(rating);
+        if (!rating) setFeedbackStatus("Listening for your guitar…");
+    }
+}
+
+feedbackToggle.addEventListener("click", () => {
+    feedback.enabled = !feedback.enabled;
+    feedbackToggle.setAttribute("aria-pressed", String(feedback.enabled));
+    feedbackToggle.textContent = feedback.enabled
+        ? "Live Feedback: On" : "Live Feedback: Off";
+    if (feedback.enabled) {
+        if (!audio.paused) void ensureFeedbackReady();
+        else setFeedbackStatus(state.chords.length
+            ? "Live feedback ready." : "Analyze the track before live feedback.");
+    } else {
+        stopFeedback();
+    }
+});
+
+setFeedbackStatus("Live feedback off.");
 
 const emptyState =
     document.querySelector("#empty-state");
@@ -530,6 +757,8 @@ function closeAudioLibrary() {
 }
 
 function clearAudioSource() {
+
+    stopFeedback();
 
     audio.pause();
 
@@ -1186,6 +1415,8 @@ async function analyzeAudio() {
     if (state.analyzing) {
         return;
     }
+    stopFeedback();
+
     state.analyzing = true;
     updateControls();
 
@@ -1245,6 +1476,8 @@ async function analyzeAudio() {
                 `Loaded saved analysis. ` +
                 `${state.chords.length} chords found.`;
 
+            if (feedback.enabled && !audio.paused) void ensureFeedbackReady();
+
         } else {
 
             status.textContent =
@@ -1290,10 +1523,13 @@ async function togglePlayback() {
 
     if (audio.paused) {
         try {
+            if (feedback.enabled) await ensureFeedbackReady();
+
             await audio.play();
         } catch (error) {
             console.error("Playback failed:", error);
             status.textContent = `Playback failed: ${error}`;
+            stopFeedback();
         }
 
     } else {
@@ -1302,11 +1538,13 @@ async function togglePlayback() {
 }
 
 export function stopPlayback() {
+    const stopped = stopFeedback();
     audio.pause();
     audio.currentTime = 0;
 
     updatePlayerUI();
     updateChordDisplay();
+    return stopped;
 }
 
 function setVolume() {
@@ -1318,6 +1556,11 @@ function setVolume() {
 function seekAudio() {
     audio.currentTime =
         Number(seekSlider.value);
+
+    clearFeedbackEvaluation();
+    if (feedback.enabled && feedback.phase === "running") {
+        setFeedbackStatus("Listening for your guitar…");
+    }
 
     state.lastActiveChordIndex = null;
 
@@ -1405,17 +1648,31 @@ audio.addEventListener(
 
 audio.addEventListener(
     "play",
-    updatePlayerUI
+    () => {
+        updatePlayerUI();
+        if (feedback.enabled && feedback.phase === "idle") void ensureFeedbackReady();
+    }
 );
 
 audio.addEventListener(
     "pause",
-    updatePlayerUI
+    () => {
+        updatePlayerUI();
+        pauseFeedback();
+    }
 );
+
+audio.addEventListener("seeked", () => {
+    clearFeedbackEvaluation();
+    if (feedback.enabled && feedback.phase === "running") {
+        setFeedbackStatus("Listening for your guitar…");
+    }
+});
 
 audio.addEventListener(
     "ended",
     () => {
+        stopFeedback();
         updatePlayerUI();
         updateChordDisplay();
     }
@@ -1425,6 +1682,7 @@ function playbackLoop() {
     if (!audio.paused) {
         updatePlayerUI();
         updateChordDisplay();
+        advanceFeedback();
     }
 
     requestAnimationFrame(

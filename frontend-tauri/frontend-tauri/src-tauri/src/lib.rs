@@ -1,3 +1,10 @@
+mod feedback_bridge;
+
+use feedback_bridge::{
+    FeedbackBridge, pause_live_feedback, resume_live_feedback,
+    start_live_feedback, stop_live_feedback,
+};
+
 // Checks if there is a connection to the backend
 #[tauri::command]
 async fn backend_health() -> Result<String, String> {
@@ -13,6 +20,7 @@ async fn backend_health() -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(FeedbackBridge::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(
@@ -27,6 +35,11 @@ pub fn run() {
 
                 begin_recording,
                 end_recording,
+
+                start_live_feedback,
+                pause_live_feedback,
+                resume_live_feedback,
+                stop_live_feedback,
 
                 load_audio_file
             ]

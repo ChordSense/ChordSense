@@ -114,9 +114,9 @@ async function showMode(mode) {
         mode === "play"
             ? playMode
             : recordMode;
-    // stop playback when enterin record mode
+    // Release the live stream before Record can claim the input.
     if (mode === "record") {
-        stopPlayback();
+        await stopPlayback();
     }
     // fade out
     const headerTransition = updateHeader(mode);
