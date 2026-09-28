@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import threading
+from contextlib import closing
 from pathlib import Path
 import time
 
@@ -43,30 +44,20 @@ app.register_blueprint(web_upload)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
 iod = IodClient()
-recording_recognizer = None
 live_feedback_session = None
 live_feedback_session_lock = threading.Lock()
 
 
-def get_recording_recognizer():
-    global recording_recognizer
-    if recording_recognizer is None:
-        from models.chordsense_cnn.chord_recognition import (
-            HailoChordRecognizer,
-            OFFLINE_POSTPROCESSING,
-        )
+def create_recording_recognizer():
+    from models.chordsense_cnn.chord_recognition import (
+        HailoChordRecognizer,
+        OFFLINE_POSTPROCESSING,
+    )
 
-        recording_recognizer = HailoChordRecognizer(
-            CUSTOM_MODEL_HEF,
-            postprocessing=OFFLINE_POSTPROCESSING,
-        )
-    return recording_recognizer
-
-
-@atexit.register
-def close_recording_recognizer():
-    if recording_recognizer is not None:
-        recording_recognizer.close()
+    return HailoChordRecognizer(
+        CUSTOM_MODEL_HEF,
+        postprocessing=OFFLINE_POSTPROCESSING,
+    )
 
 
 def get_live_feedback_session():
@@ -433,10 +424,12 @@ def end_recording():
         print(f"Capture written to {wav_path} ({capture_duration:.2f}s)", flush=True)
 
         print("Running whole-recording inference on Hailo...", flush=True)
-        recognizer = get_recording_recognizer()
-        result = recognizer.analyze_file(wav_path)
-        if not recognizer.write_lab_file(result, output_lab_path):
-            raise RuntimeError("Chord recognition produced no output")
+        # Release the device before live feedback opens its own HEF. Keeping
+        # this recognizer cached pins the only physical Hailo device.
+        with closing(create_recording_recognizer()) as recognizer:
+            result = recognizer.analyze_file(wav_path)
+            if not recognizer.write_lab_file(result, output_lab_path):
+                raise RuntimeError("Chord recognition produced no output")
         chords = [
             {
                 "start": segment.start,
