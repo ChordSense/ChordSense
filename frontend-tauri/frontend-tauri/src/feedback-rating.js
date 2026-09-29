@@ -1,5 +1,7 @@
 /** Pure chord matching and temporal rating state for playback feedback. */
 
+const EXPERIMENTAL_TEMPLATE_MODEL = "chordsense-chroma-template-experimental";
+
 const PITCH_CLASS = Object.freeze({
     C: 0, "B#": 0, "C#": 1, Db: 1,
     D: 2, "D#": 3, Eb: 3,
@@ -68,6 +70,7 @@ export class FeedbackRater {
             chordGraceMs: 250,
             positiveDwellMs: 200,
             redDwellMs: 350,
+            experimentalDwellMs: 500,
             minDisplayMs: 300,
             dropoutHoldMs: 240,
             maxAgeMs: 750,
@@ -85,6 +88,7 @@ export class FeedbackRater {
         this.candidateSince = null;
         this.lastRatingChangeAt = null;
         this.lastReliableAt = null;
+        this.lastRatingSupportAt = null;
     }
 
     advance(playbackTimeSeconds) {
@@ -94,6 +98,7 @@ export class FeedbackRater {
             this.rating = null;
             this.candidate = null;
             this.candidateSince = null;
+            this.lastRatingSupportAt = null;
             return this._result(playbackTimeSeconds);
         }
         if (current.index !== this.segmentIndex) {
@@ -103,12 +108,19 @@ export class FeedbackRater {
             this.candidateSince = null;
             this.lastRatingChangeAt = null;
             this.lastReliableAt = null;
-        } else if (this.lastReliableAt !== null &&
-            playbackTimeSeconds * 1000 - this.lastReliableAt > this.options.dropoutHoldMs) {
-            this.rating = null;
-            this.candidate = null;
-            this.candidateSince = null;
-            this.lastRatingChangeAt = null;
+            this.lastRatingSupportAt = null;
+        } else {
+            if (this.lastReliableAt !== null &&
+                playbackTimeSeconds * 1000 - this.lastReliableAt > this.options.dropoutHoldMs) {
+                this.candidate = null;
+                this.candidateSince = null;
+            }
+            if (this.lastRatingSupportAt !== null &&
+                playbackTimeSeconds * 1000 - this.lastRatingSupportAt > this.options.dropoutHoldMs) {
+                this.rating = null;
+                this.lastRatingChangeAt = null;
+                this.lastRatingSupportAt = null;
+            }
         }
         return this._result(playbackTimeSeconds);
     }
@@ -146,6 +158,7 @@ export class FeedbackRater {
             this.segmentIndex = null;
             this.rating = null;
             this.candidate = null;
+            this.lastRatingSupportAt = null;
             return this._result(sampleTime);
         }
         if (current.index !== this.segmentIndex) {
@@ -155,31 +168,38 @@ export class FeedbackRater {
             this.candidateSince = null;
             this.lastRatingChangeAt = null;
             this.lastReliableAt = null;
+            this.lastRatingSupportAt = null;
         }
         const sampleMs = sampleTime * 1000;
         if (sampleMs - current.segment.start * 1000 < this.options.chordGraceMs) {
             return this._result(sampleTime);
         }
+        const isExperimentalTemplate = event.model === EXPERIMENTAL_TEMPLATE_MODEL;
+        const chordRating = classifyChordRating(current.segment.chord, event.chord);
+        const proposedRating = isExperimentalTemplate &&
+            event.qualityUncertain === true && chordRating === "green"
+                ? "yellow" : chordRating;
         const neededConfidence =
-            classifyChordRating(current.segment.chord, event.chord) === "red"
+            proposedRating === "red"
                 ? this.options.redConfidence : this.options.confidence;
         const reliable = event.inputQuality === "ok" &&
             Number.isFinite(event.confidence) &&
             event.confidence >= neededConfidence;
-        const proposed = reliable
-            ? classifyChordRating(current.segment.chord, event.chord) : null;
+        const proposed = reliable ? proposedRating : null;
         if (!proposed) {
             this.candidate = null;
             this.candidateSince = null;
-            if (this.lastReliableAt === null ||
-                event.playbackTimeSeconds * 1000 - this.lastReliableAt > this.options.dropoutHoldMs) {
+            if (this.lastRatingSupportAt === null ||
+                event.playbackTimeSeconds * 1000 - this.lastRatingSupportAt > this.options.dropoutHoldMs) {
                 this.rating = null;
                 this.lastRatingChangeAt = null;
+                this.lastRatingSupportAt = null;
             }
             return this._result(sampleTime);
         }
         this.lastReliableAt = event.playbackTimeSeconds * 1000;
         if (proposed === this.rating) {
+            this.lastRatingSupportAt = event.playbackTimeSeconds * 1000;
             this.candidate = null;
             this.candidateSince = null;
             return this._result(sampleTime);
@@ -189,13 +209,16 @@ export class FeedbackRater {
             this.candidateSince = sampleMs;
             return this._result(sampleTime);
         }
-        const dwell = proposed === "red"
-            ? this.options.redDwellMs : this.options.positiveDwellMs;
+        const dwell = isExperimentalTemplate
+            ? this.options.experimentalDwellMs
+            : proposed === "red"
+                ? this.options.redDwellMs : this.options.positiveDwellMs;
         const heldLongEnough = this.lastRatingChangeAt === null ||
             sampleMs - this.lastRatingChangeAt >= this.options.minDisplayMs;
         if (sampleMs - this.candidateSince >= dwell && heldLongEnough) {
             this.rating = proposed;
             this.lastRatingChangeAt = sampleMs;
+            this.lastRatingSupportAt = event.playbackTimeSeconds * 1000;
             this.candidate = null;
             this.candidateSince = null;
         }

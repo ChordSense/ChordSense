@@ -349,6 +349,8 @@ const feedbackListenerReady = window.__TAURI__.event.listen(
             chord: payload.chord,
             inputQuality: payload.input_quality,
             confidence: payload.confidence,
+            model: payload.model,
+            qualityUncertain: payload.quality_uncertain === true,
         });
         renderFeedbackRating(result?.rating ?? null);
         if (!result?.rating && feedbackStatus.textContent !== "Listening for your guitar…") {

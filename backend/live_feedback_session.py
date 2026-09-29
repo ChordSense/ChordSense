@@ -22,6 +22,7 @@ from models.chordsense_cnn.streaming import (
     DEFAULT_STREAMING_PREPROCESSING_CONFIG,
     StreamingChordRecognizer,
 )
+from models.chordsense_cnn.template import StreamingTemplateRecognizer, TemplatePrediction
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -38,8 +39,16 @@ class FeedbackStateError(RuntimeError):
     """The requested lifecycle operation is invalid in the current state."""
 
 
-def load_live_recognizer() -> StreamingChordRecognizer:
-    """Load only an explicitly documented causal-STFT HEF, never the offline HEF."""
+LiveRecognizer = StreamingChordRecognizer | StreamingTemplateRecognizer
+
+
+def load_live_recognizer() -> LiveRecognizer:
+    """Load the validated HEF, or an explicitly selected DSP experiment."""
+    mode = os.environ.get("CHORDSENSE_LIVE_RECOGNIZER", "cnn").lower()
+    if mode == "template":
+        return StreamingTemplateRecognizer()
+    if mode != "cnn":
+        raise ValueError("CHORDSENSE_LIVE_RECOGNIZER must be cnn or template")
     hef_path = Path(os.environ.get("CHORDSENSE_LIVE_HEF", str(DEFAULT_LIVE_HEF)))
     manifest_path = Path(
         os.environ.get("CHORDSENSE_LIVE_MANIFEST", str(DEFAULT_LIVE_MANIFEST))
@@ -82,16 +91,24 @@ class LiveFeedbackSession:
     def __init__(
         self,
         iod: IodClient | None = None,
-        recognizer_factory: Callable[[], StreamingChordRecognizer] = load_live_recognizer,
+        recognizer_factory: Callable[[], LiveRecognizer] = load_live_recognizer,
         frame_samples: int = 441,
         silence_rms: float = 0.008,
         clipping_fraction: float = 0.05,
+        shadow_factory: Callable[[], StreamingTemplateRecognizer] | None = None,
     ):
         self.iod = iod or IodClient()
         self.recognizer_factory = recognizer_factory
         self.frame_samples = frame_samples
         self.silence_rms = silence_rms
         self.clipping_fraction = clipping_fraction
+        self.shadow_factory = shadow_factory
+        if (
+            self.shadow_factory is None
+            and os.environ.get("CHORDSENSE_DSP_SHADOW") == "1"
+            and os.environ.get("CHORDSENSE_LIVE_RECOGNIZER", "cnn").lower() == "cnn"
+        ):
+            self.shadow_factory = StreamingTemplateRecognizer
         self._condition = threading.Condition()
         self._lifecycle_lock = threading.RLock()
         self._events: deque[dict] = deque(maxlen=128)
@@ -99,7 +116,8 @@ class LiveFeedbackSession:
         self._session_id: str | None = None
         self._generation = 0
         self._sequence = 0
-        self._recognizer: StreamingChordRecognizer | None = None
+        self._recognizer: LiveRecognizer | None = None
+        self._shadow_recognizer: StreamingTemplateRecognizer | None = None
         self._stream: IodStream | None = None
         self._worker: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -142,13 +160,23 @@ class LiveFeedbackSession:
             self._events.clear()
             self._error = None
         recognizer = None
+        shadow = None
         stream = None
         try:
             recognizer = self.recognizer_factory()
+            if self.shadow_factory is not None:
+                try:
+                    shadow = self.shadow_factory()
+                except Exception as exc:
+                    # A comparison experiment must not prevent the verified
+                    # primary recognizer from starting.
+                    self._publish({"type": "status", "status": "dsp_shadow_error", "error": str(exc)})
             stream = self.iod.open_stream(self.frame_samples)
         except Exception as exc:
             if stream is not None:
                 stream.close()
+            if shadow is not None:
+                shadow.close()
             if recognizer is not None:
                 recognizer.close()
             with self._condition:
@@ -158,6 +186,7 @@ class LiveFeedbackSession:
                 raise FeedbackBusyError(str(exc)) from exc
             raise
         self._recognizer = recognizer
+        self._shadow_recognizer = shadow
         self._stream = stream
         self._stop_event = threading.Event()
         with self._condition:
@@ -179,7 +208,7 @@ class LiveFeedbackSession:
     def _run(
         self,
         stream: IodStream,
-        recognizer: StreamingChordRecognizer,
+        recognizer: LiveRecognizer,
         stop_event: threading.Event,
         generation: int,
     ) -> None:
@@ -187,7 +216,29 @@ class LiveFeedbackSession:
         base_sample: int | None = None
         silent_samples = 0
         silence_reset = False
+        signal_hold_samples = 0
         failed = False
+        shadow = self._shadow_recognizer
+        experimental = isinstance(recognizer, StreamingTemplateRecognizer)
+
+        def disable_shadow(exc: Exception) -> None:
+            nonlocal shadow
+            if shadow is not None:
+                try:
+                    shadow.close()
+                except Exception:
+                    pass
+            shadow = None
+            self._shadow_recognizer = None
+            self._publish({"type": "status", "status": "dsp_shadow_error", "error": str(exc)})
+
+        def reset_shadow() -> None:
+            if shadow is not None:
+                try:
+                    shadow.reset()
+                except Exception as exc:
+                    disable_shadow(exc)
+
         try:
             while not stop_event.is_set():
                 try:
@@ -196,25 +247,36 @@ class LiveFeedbackSession:
                     continue
                 if next_sample is not None and frame.sample_index != next_sample:
                     recognizer.reset()
+                    reset_shadow()
                     base_sample = None
                     silent_samples = 0
                     silence_reset = False
+                    signal_hold_samples = 0
                     self._publish({"type": "status", "status": "stream_gap"})
                 next_sample = frame.sample_index + frame.sample_count
                 samples = np.frombuffer(frame.pcm16le, dtype="<i2")
                 normalized = samples.astype(np.float32) / 32768.0
                 rms = float(np.sqrt(np.mean(normalized * normalized)))
+                ac_rms = float(np.sqrt(np.mean((normalized - np.mean(normalized)) ** 2)))
+                if ac_rms >= self.silence_rms:
+                    signal_hold_samples = round(0.15 * SAMPLE_RATE)
+                else:
+                    signal_hold_samples = max(0, signal_hold_samples - frame.sample_count)
+                signal_ok = ac_rms >= self.silence_rms or signal_hold_samples > 0
                 clipped = float(np.mean(np.abs(normalized) >= 0.98))
+                has_signal = signal_ok if experimental else rms >= self.silence_rms
                 quality = (
                     "clipping" if clipped >= self.clipping_fraction
-                    else "silence" if rms < self.silence_rms
+                    else "silence" if not has_signal
                     else "ok"
                 )
                 if quality == "silence":
                     silent_samples += frame.sample_count
-                    if silent_samples >= round(0.25 * SAMPLE_RATE):
+                    reset_after = 1.0 if experimental else 0.25
+                    if silent_samples >= round(reset_after * SAMPLE_RATE):
                         if not silence_reset:
                             recognizer.reset()
+                            reset_shadow()
                             base_sample = None
                             silence_reset = True
                             self._publish({"type": "status", "status": "silence"})
@@ -222,12 +284,21 @@ class LiveFeedbackSession:
                 else:
                     if silence_reset:
                         recognizer.reset()
+                        reset_shadow()
                         base_sample = None
                         silence_reset = False
                     silent_samples = 0
                 if base_sample is None:
                     base_sample = frame.sample_index
                 predictions = recognizer.push_samples(samples)
+                shadow_predictions = {}
+                if shadow is not None:
+                    try:
+                        shadow_predictions = {
+                            item.sample_index: item for item in shadow.push_samples(samples)
+                        }
+                    except Exception as exc:
+                        disable_shadow(exc)
                 for prediction in predictions:
                     sample_end = base_sample + prediction.sample_index
                     captured_at_ns = self._prediction_time_ns(frame, sample_end)
@@ -235,9 +306,9 @@ class LiveFeedbackSession:
                         max(0.0, (time.monotonic_ns() - captured_at_ns) / 1_000_000)
                         if captured_at_ns is not None else None
                     )
-                    self._publish({
+                    event = {
                         "type": "prediction",
-                        "model": "chordsense-causal-stft-cnn",
+                        "model": getattr(recognizer, "model_name", "chordsense-causal-stft-cnn"),
                         "inference_backend": getattr(getattr(recognizer, "backend", None), "name", "unknown"),
                         "sample_index": sample_end,
                         "captured_at_ns": captured_at_ns,
@@ -247,7 +318,26 @@ class LiveFeedbackSession:
                         "changed": prediction.changed,
                         "input_quality": quality,
                         "rms": rms,
-                    })
+                    }
+                    if experimental:
+                        event.update({
+                            "ac_rms": ac_rms,
+                            "confidence_kind": "template_root_margin",
+                            "quality_uncertain": prediction.quality_uncertain,
+                            "template_evidence": self._template_evidence(prediction),
+                        })
+                    if shadow is not None:
+                        other = shadow_predictions.get(prediction.sample_index)
+                        if other is not None:
+                            event["dsp_experiment"] = {
+                                "sample_index": sample_end,
+                                "chord": other.chord if signal_ok else None,
+                                "signal_ok": signal_ok,
+                                "ac_rms": ac_rms,
+                                "quality_uncertain": other.quality_uncertain,
+                                **self._template_evidence(other),
+                            }
+                    self._publish(event)
         except Exception as exc:
             if not stop_event.is_set():
                 failed = True
@@ -261,10 +351,29 @@ class LiveFeedbackSession:
             if failed:
                 try:
                     recognizer.close()
+                    if shadow is not None:
+                        try:
+                            shadow.close()
+                        except Exception:
+                            pass
                 finally:
                     with self._condition:
                         if self._recognizer is recognizer:
                             self._recognizer = None
+                        if self._shadow_recognizer is shadow:
+                            self._shadow_recognizer = None
+
+    @staticmethod
+    def _template_evidence(prediction: TemplatePrediction) -> dict:
+        return {
+            "raw_chord": prediction.raw_chord,
+            "accepted": prediction.accepted,
+            "score": prediction.score,
+            "concentration": prediction.concentration,
+            "margin": prediction.margin,
+            "root_margin": prediction.root_margin,
+            "quality_margin": prediction.quality_margin,
+        }
 
     @staticmethod
     def _prediction_time_ns(frame: IodSampleFrame, sample_end: int) -> int | None:
@@ -299,6 +408,16 @@ class LiveFeedbackSession:
         stream = self.iod.open_stream(self.frame_samples)
         assert self._recognizer is not None
         self._recognizer.reset()
+        if self._shadow_recognizer is not None:
+            try:
+                self._shadow_recognizer.reset()
+            except Exception as exc:
+                try:
+                    self._shadow_recognizer.close()
+                except Exception:
+                    pass
+                self._shadow_recognizer = None
+                self._publish({"type": "status", "status": "dsp_shadow_error", "error": str(exc)})
         self._stream = stream
         self._stop_event = threading.Event()
         with self._condition:
@@ -333,6 +452,12 @@ class LiveFeedbackSession:
         if self._recognizer is not None:
             self._recognizer.close()
             self._recognizer = None
+        if self._shadow_recognizer is not None:
+            try:
+                self._shadow_recognizer.close()
+            except Exception:
+                pass
+            self._shadow_recognizer = None
         with self._condition:
             self._state = "idle"
             self._error = None

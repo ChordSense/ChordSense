@@ -81,3 +81,98 @@ test("clears a stale rating without new predictions and ignores previous-chord s
     assert.equal(observe(3, 2.10, 300), null);
     assert.equal(rater.advance(2.50).segmentIndex, 1);
 });
+
+test("experimental template waits 500 ms before showing a matching chord", () => {
+    const rater = new FeedbackRater([{ start: 0, end: 3, chord: "C" }]);
+    rater.reset("template-session");
+    let sequence = 0;
+    const observe = time => rater.observe({
+        sessionId: "template-session", sequence: ++sequence,
+        playbackTimeSeconds: time, sampleAgeMs: 0,
+        model: "chordsense-chroma-template-experimental",
+        chord: "C", confidence: 0.95, inputQuality: "ok",
+        qualityUncertain: false
+    }).rating;
+    assert.equal(observe(0.30), null);
+    assert.equal(observe(0.52), null);
+    assert.equal(observe(0.72), null);
+    assert.equal(observe(0.83), "green");
+});
+
+test("template quality uncertainty downgrades an exact match to yellow", () => {
+    const rater = new FeedbackRater([{ start: 0, end: 3, chord: "C" }]);
+    rater.reset("template-session");
+    let sequence = 0;
+    const observe = (time, chord) => rater.observe({
+        sessionId: "template-session", sequence: ++sequence,
+        playbackTimeSeconds: time, sampleAgeMs: 0,
+        model: "chordsense-chroma-template-experimental",
+        chord, confidence: 0.95, inputQuality: "ok",
+        qualityUncertain: true
+    }).rating;
+    assert.equal(observe(0.30, "C"), null);
+    assert.equal(observe(0.52, "C"), null);
+    assert.equal(observe(0.72, "C"), null);
+    assert.equal(observe(0.83, "C"), "yellow");
+
+    rater.reset("template-session");
+    sequence = 0;
+    assert.equal(observe(0.30, "G"), null);
+    assert.equal(observe(0.52, "G"), null);
+    assert.equal(observe(0.72, "G"), null);
+    assert.equal(observe(0.83, "G"), "red");
+});
+
+test("CNN keeps its existing dwell and ignores template-only uncertainty", () => {
+    const rater = new FeedbackRater([{ start: 0, end: 3, chord: "C" }]);
+    rater.reset("cnn-session");
+    let sequence = 0;
+    const observe = time => rater.observe({
+        sessionId: "cnn-session", sequence: ++sequence,
+        playbackTimeSeconds: time, sampleAgeMs: 0,
+        model: "chordsense-causal-stft-cnn",
+        chord: "C", confidence: 0.95, inputQuality: "ok",
+        qualityUncertain: true
+    }).rating;
+    assert.equal(observe(0.30), null);
+    assert.equal(observe(0.52), "green");
+});
+
+test("contradictory template evidence cannot prolong an existing green rating", () => {
+    const rater = new FeedbackRater([{ start: 0, end: 3, chord: "C" }]);
+    rater.reset("template-session");
+    let sequence = 0;
+    const observe = (time, chord) => rater.observe({
+        sessionId: "template-session", sequence: ++sequence,
+        playbackTimeSeconds: time, sampleAgeMs: 0,
+        model: "chordsense-chroma-template-experimental",
+        chord, confidence: 0.95, inputQuality: "ok",
+        qualityUncertain: false
+    }).rating;
+    for (const time of [0.30, 0.50, 0.70]) assert.equal(observe(time, "C"), null);
+    assert.equal(observe(0.83, "C"), "green");
+    assert.equal(observe(0.90, "G"), "green");
+    assert.equal(observe(1.05, "G"), "green");
+    assert.equal(observe(1.10, "G"), null);
+    assert.equal(observe(1.30, "G"), null);
+    assert.equal(observe(1.42, "G"), "red");
+});
+
+test("intermittent contradictory CNN evidence cannot keep green indefinitely", () => {
+    const rater = new FeedbackRater([{ start: 0, end: 4, chord: "E" }]);
+    rater.reset("cnn-session");
+    let sequence = 0;
+    const observe = (time, chord, confidence) => rater.observe({
+        sessionId: "cnn-session", sequence: ++sequence,
+        playbackTimeSeconds: time, sampleAgeMs: 0,
+        model: "chordsense-causal-stft-cnn",
+        chord, confidence, inputQuality: "ok"
+    }).rating;
+    assert.equal(observe(0.30, "E", 0.95), null);
+    assert.equal(observe(0.52, "E", 0.95), "green");
+    for (let index = 0; index < 40; index += 1) {
+        const rating = observe(0.57 + index * 0.05, "F#m",
+            index % 5 === 4 ? 0.65 : 0.75);
+        if (index >= 4) assert.equal(rating, null);
+    }
+});
