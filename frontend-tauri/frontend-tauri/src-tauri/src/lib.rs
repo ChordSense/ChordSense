@@ -291,6 +291,15 @@ struct AnalyzeResponse {
     processing_time: f64,
 
     #[serde(default)]
+    cached: bool,
+
+    #[serde(default)]
+    cache_key: Option<String>,
+
+    #[serde(default)]
+    lab_file: Option<String>,
+
+    #[serde(default)]
     stdout: Option<String>,
 
     #[serde(default)]

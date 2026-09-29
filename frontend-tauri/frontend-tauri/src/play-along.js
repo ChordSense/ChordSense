@@ -1239,7 +1239,18 @@ async function analyzeAudio() {
 
         state.lastActiveChordIndex = null;
 
-        status.textContent = `Analysis complete. ` + `${state.chords.length} chords found.`;
+        if (result.cached) {
+
+            status.textContent =
+                `Loaded saved analysis. ` +
+                `${state.chords.length} chords found.`;
+
+        } else {
+
+            status.textContent =
+                `Analysis complete. ` +
+                `${state.chords.length} chords found.`;
+        }
 
         if (state.chords.length) {
             emptyState.classList.add("hidden");

@@ -3,12 +3,19 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+import time
 
 from flask import Flask, jsonify, request
 from werkzeug.utils import secure_filename
 
 from iod_client import IodClient, IodError
 from web_upload import web_upload
+
+from analysis_cache import (
+    identify_audio,
+    load_cache_entry,
+    save_cache_entry,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 # Original: MODEL_REPO = BASE_DIR / "model_repo"
@@ -133,58 +140,246 @@ def health():
 
 @app.post("/analyze")
 def analyze():
-    print("=== /analyze request received ===", flush=True)
+
+    print(
+        "=== /analyze request received ===",
+        flush=True
+    )
 
     if "file" not in request.files:
-        return jsonify({"success": False, "error": "No file uploaded"}), 400
+
+        return jsonify({
+            "success": False,
+            "error": "No file uploaded"
+        }), 400
+
 
     file = request.files["file"]
+
     if not file.filename:
-        return jsonify({"success": False, "error": "Empty filename"}), 400
 
-    chord_dict = request.form.get("chord_dict", "submission").strip() or "submission"
-    safe_name = secure_filename(file.filename)
-    suffix = Path(safe_name).suffix or ".wav"
+        return jsonify({
+            "success": False,
+            "error": "Empty filename"
+        }), 400
 
-    with tempfile.NamedTemporaryFile(
-        dir=INPUTS_DIR,
-        suffix=suffix,
-        prefix="audio_",
-        delete=False,
-    ) as tmp_in:
-        input_path = Path(tmp_in.name)
 
-    file.save(str(input_path))
-    output_lab_path = OUTPUTS_DIR / f"{input_path.stem}.lab"
+    chord_dict = (
+        request.form.get(
+            "chord_dict",
+            "submission"
+        ).strip()
+        or
+        "submission"
+    )
 
-    print(f"Uploaded file: {file.filename}", flush=True)
-    print(f"Saved temp input: {input_path}", flush=True)
-    print(f"Chord dictionary: {chord_dict}", flush=True)
-    print("Starting model inference...", flush=True)
+
+    safe_name = (
+        secure_filename(
+            file.filename
+        )
+        or
+        "audio.wav"
+    )
+
+    suffix = (
+        Path(safe_name).suffix
+        or
+        ".wav"
+    )
+
+    input_path = None
+    output_lab_path = None
 
     try:
-        stdout, stderr = run_model(input_path, output_lab_path, chord_dict)
-        chords = parse_lab_file(output_lab_path)
-        duration = chords[-1]["end"] if chords else 0.0
 
-        print(f"Model finished. Parsed {len(chords)} chords.", flush=True)
+        # Save incoming audio temporarily.
+        with tempfile.NamedTemporaryFile(
+            dir=INPUTS_DIR,
+            suffix=suffix,
+            prefix="audio_",
+            delete=False,
+        ) as tmp_in:
+
+            input_path = Path(tmp_in.name)
+
+        file.save(str(input_path))
+        print(
+            f"Uploaded file: {file.filename}",
+            flush=True
+        )
+
+
+        # --------------------------------
+        # CACHE LOOKUP
+        # --------------------------------
+
+        (
+            cache_key,
+            audio_sha256
+        ) = identify_audio(
+            input_path,
+            chord_dict
+        )
+        cached_entry = (load_cache_entry(cache_key))
+        if cached_entry is not None:
+
+            print(
+                f"Analysis cache hit: "
+                f"{cache_key}",
+                flush=True
+            )
+            chords = parse_lab_file(cached_entry.lab_path)
+            duration = (
+                cached_entry.metadata.get(
+                    "duration"
+                )
+                or
+                (
+                    chords[-1]["end"]
+                    if chords
+                    else 0.0
+                )
+            )
+
+
+            return jsonify({
+
+                "success": True,
+
+                "chords":chords,
+
+                "total_chords":len(chords),
+
+                "duration":duration,
+
+                "model_used":
+                    cached_entry.metadata.get(
+                        "model_used",
+                        "chord-cnn-lstm"
+                    ),
+
+                "model_name":
+                    cached_entry.metadata.get(
+                        "model_name",
+                        "Chord-CNN-LSTM"
+                    ),
+
+                "chord_dict":chord_dict,
+
+                "processing_time":0.0,
+
+                "stdout":"",
+
+                "stderr":"",
+
+                "lab_file":str(cached_entry.lab_path),
+
+                "cached":True,
+
+                "cache_key":cache_key,
+            })
+
+
+        # --------------------------------
+        # CACHE MISS — RUN MODEL
+        # --------------------------------
+        print(
+            "No cached analysis found.",
+            flush=True
+        )
+        print(
+            "Starting model inference...",
+            flush=True
+        )
+        output_lab_path = (OUTPUTS_DIR / f"{input_path.stem}.lab")
+        start_time = (time.perf_counter())
+        stdout, stderr = run_model(input_path, output_lab_path, chord_dict)
+
+        processing_time = (time.perf_counter() - start_time)
+
+        chords = parse_lab_file(
+            output_lab_path
+        )
+
+        duration = (
+            chords[-1]["end"]
+            if chords
+            else 0.0
+        )
+
+
+        # --------------------------------
+        # SAVE PERSISTENT CACHE
+        # --------------------------------
+
+        cache_entry = (
+            save_cache_entry(
+
+                cache_key=cache_key,
+
+                audio_sha256=audio_sha256,
+
+                original_name=safe_name,
+
+                chord_dict=chord_dict,
+
+                source_lab_path=output_lab_path,
+
+                duration=duration,
+
+                total_chords=len(chords),
+
+                model_used="chord-cnn-lstm",
+
+                model_name="Chord-CNN-LSTM"
+            )
+        )
+        print(f"Saved analysis cache: "f"{cache_entry.lab_path}",flush=True)
 
         return jsonify({
             "success": True,
-            "chords": chords,
-            "total_chords": len(chords),
-            "duration": duration,
-            "model_used": "chord-cnn-lstm",
-            "model_name": "Chord-CNN-LSTM",
-            "chord_dict": chord_dict,
-            "processing_time": 0.0,
-            "stdout": stdout,
-            "stderr": stderr,
-            "lab_file": str(output_lab_path),
+            "chords":chords,
+            "total_chords":len(chords),
+            "duration":duration,
+            "model_used":"chord-cnn-lstm",
+            "model_name":"Chord-CNN-LSTM",
+            "chord_dict":chord_dict,
+            "processing_time":processing_time,
+            "stdout":stdout,
+            "stderr":stderr,
+            "lab_file":str(cache_entry.lab_path),
+            "cached":False,
+            "cache_key":cache_key,
         })
-    except Exception as e:
-        print(f"Analyze failed: {e}", flush=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+    except Exception as error:
+
+        print(
+            f"Analyze failed: {error}",
+            flush=True
+        )
+        return jsonify({
+            "success": False,
+            "error": str(error)
+        }), 500
+
+
+    finally:
+        # These files are temporary.
+        # The persistent .lab is already
+        # stored in analysis_cache.
+        if (
+            input_path is not None and
+            input_path.exists()
+        ):
+            input_path.unlink()
+
+
+        if (
+            output_lab_path is not None and
+            output_lab_path.exists()
+        ):
+            output_lab_path.unlink()
 
 
 @app.post("/begin_recording")
