@@ -81,6 +81,62 @@
                 />
             </label>
 
+            <div
+                class="capo-controls"
+                aria-label="Capo controls"
+            >
+                <span class="capo-title">
+                    <img
+                        src="assets/icons/capo.png"
+                        alt=""
+                        class="capo-icon"
+                    />
+
+                    Capo
+                </span>
+
+                <button
+                    id="capo-down"
+                    class="capo-step"
+                    type="button"
+                    aria-label="Lower capo position"
+                >
+                    −
+                </button>
+
+                <strong
+                    id="capo-position"
+                    class="capo-position"
+                >
+                    0
+                </strong>
+
+                <button
+                    id="capo-up"
+                    class="capo-step"
+                    type="button"
+                    aria-label="Raise capo position"
+                >
+                    +
+                </button>
+
+                <span
+                    id="capo-recommendation"
+                    class="capo-recommendation"
+                >
+                    Recommended: —
+                </span>
+
+                <button
+                    id="capo-use-recommended"
+                    class="capo-use-recommended"
+                    type="button"
+                    disabled
+                >
+                    Use
+                </button>
+            </div>
+
         </section>
 
         <p id="status" role="status" aria-live="polite"></p>

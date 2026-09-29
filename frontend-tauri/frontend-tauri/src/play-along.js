@@ -1,3 +1,7 @@
+import {
+    chordForCapo,
+    recommendCapo
+} from "./capo.js";
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
 
@@ -14,6 +18,10 @@ const state = {
     analyzing: false,
 
     chords: [],
+
+    capo: 0,
+    recommendedCapo: null,
+
     analysisDuration: 0,
 
     lastActiveChordIndex: null,
@@ -98,6 +106,99 @@ const incomingLabel =
 
 const chordTrack =
     document.querySelector("#chord-track");
+
+// Map these to physical buttons (TODO)
+const capoDownButton =
+    document.querySelector(
+        "#capo-down"
+    );
+
+const capoUpButton =
+    document.querySelector(
+        "#capo-up"
+    );
+
+const capoPosition =
+    document.querySelector(
+        "#capo-position"
+    );
+
+const capoRecommendation =
+    document.querySelector(
+        "#capo-recommendation"
+    );
+
+const capoUseRecommendedButton =
+    document.querySelector(
+        "#capo-use-recommended"
+    );
+
+function updateCapoControls() {
+    capoPosition.textContent =
+        String(state.capo);
+
+    capoDownButton.disabled =
+        state.capo <= 0;
+
+    capoUpButton.disabled =
+        state.capo >= 11;
+}
+
+
+function refreshChordDisplayForCapo() {
+    /*
+     * Force the current carousel cards to
+     * re-render even though playback has not
+     * moved to another chord.
+     */
+    state.lastActiveChordIndex = null;
+
+    updateChordDisplay();
+}
+
+
+function setCapo(position) {
+    state.capo = Math.max(0, Math.min(11, position));
+
+    updateCapoControls();
+
+    refreshChordDisplayForCapo();
+}
+
+
+function clearCapoRecommendation() {
+    state.recommendedCapo = null;
+
+    capoRecommendation.textContent = "Recommended: —";
+
+    capoRecommendation.removeAttribute("title");
+
+    capoUseRecommendedButton.disabled = true;
+}
+
+
+function updateCapoRecommendation() {
+    const recommendation = recommendCapo(state.chords);
+
+    state.recommendedCapo = recommendation.capo;
+
+    capoRecommendation.textContent =
+        recommendation.capo === 0
+            ? "Recommended: No Capo"
+            : `Recommended: Capo ${recommendation.capo}`;
+
+    capoRecommendation.title = `${recommendation.easyCount} of ` + `${recommendation.totalChords} ` + `chord shapes should be easier.`;
+
+    capoUseRecommendedButton.disabled = false;
+}
+
+
+function resetCapoForNewAudio() {
+    state.capo = 0;
+
+    updateCapoControls();
+    clearCapoRecommendation();
+}
 
 function formatFileSize(bytes) {
 
@@ -470,6 +571,8 @@ function applyLoadedAudio({
 
     state.chords = [];
 
+    resetCapoForNewAudio();
+
     state.analysisDuration =
         0;
 
@@ -788,26 +891,34 @@ function displayChord(
     if (!chord) {
         imageElement.style.visibility = "hidden";
         imageElement.removeAttribute("src");
-
         labelElement.textContent = "";
-
         return;
     }
 
-    const path =
-        chordImagePath(chord.chord);
+    /*
+     * IMPORTANT:
+     *
+     * state.chords remains untouched.
+     *
+     * We only transpose the chord immediately
+     * before it is displayed.
+     */
+    const displayedChord = chordForCapo(chord.chord, state.capo);
 
-    labelElement.textContent =
-        chord.chord;
+    const path = chordImagePath(displayedChord);
+
+    labelElement.textContent = displayedChord;
 
     if (!path) {
         imageElement.style.visibility = "hidden";
+
         imageElement.removeAttribute("src");
 
         return;
     }
 
     imageElement.src = path;
+
     imageElement.style.visibility = "visible";
 }
 
@@ -816,8 +927,7 @@ function updateChordDisplay() {
         return;
     }
 
-    const time =
-        audio.currentTime || 0;
+    const time = audio.currentTime || 0;
 
     const {
         index,
@@ -832,41 +942,20 @@ function updateChordDisplay() {
      * immediately show correct chords.
      */
     if (state.lastActiveChordIndex === null) {
-        renderChordSet(
-            previous,
-            current,
-            next,
-            incoming
-        );
-
-        state.lastActiveChordIndex =
-            index;
-
+        renderChordSet(previous, current, next, incoming);
+        state.lastActiveChordIndex = index;
         return;
     }
 
-    if (
-        index ===
-        state.lastActiveChordIndex
-    ) {
+    if (index === state.lastActiveChordIndex) {
         return;
     }
 
     /*
      * Usually one step during normal playback.
      */
-    if (
-        index ===
-        state.lastActiveChordIndex + 1
-    ) {
-        rollToChord(
-            previous,
-            current,
-            next,
-            incoming,
-            index
-        );
-
+    if (index === state.lastActiveChordIndex + 1) {
+        rollToChord(previous, current, next, incoming, index);
         return;
     }
 
@@ -874,30 +963,15 @@ function updateChordDisplay() {
      * Large jump / unusual timing:
      * don't animate through several chords.
      */
-    renderChordSet(
-        previous,
-        current,
-        next,
-        incoming
-    );
-
-    state.lastActiveChordIndex =
-        index;
+    renderChordSet(previous, current, next, incoming);
+    state.lastActiveChordIndex = index;
 }
 
-function rollToChord(
-    previous,
-    current,
-    next,
-    incoming,
-    newIndex
-) {
+function rollToChord(previous, current, next, incoming, newIndex) {
     if (state.isChordTransitioning) {
         return;
     }
-
     state.isChordTransitioning = true;
-
     /*
      * IMPORTANT:
      *
@@ -906,7 +980,6 @@ function rollToChord(
      * It already contains the chord that needs
      * to roll into the Next position.
      */
-
     chordTrack.classList.add("rolling");
 
     const finishTransition = () => {
@@ -918,21 +991,13 @@ function rollToChord(
 
         chordTrack.classList.remove("rolling");
 
-        renderChordSet(
-            previous,
-            current,
-            next,
-            incoming
-        );
+        renderChordSet(previous, current, next, incoming);
 
         void chordTrack.offsetHeight;
 
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-                chordTrack.classList.remove(
-                    "no-transition"
-                );
-
+                chordTrack.classList.remove("no-transition");
                 state.lastActiveChordIndex = newIndex;
                 state.isChordTransitioning = false;
             });
@@ -956,90 +1021,44 @@ function renderChordSet(previous, current, next, incoming) {
 
     displayChord(current, currentImage, currentLabel);
 
-    displayChord(
-        next,
-        nextImage,
-        nextLabel
-    );
+    displayChord(next, nextImage, nextLabel);
 
-    displayChord(
-        incoming,
-        incomingImage,
-        incomingLabel
-    );
+    displayChord(incoming, incomingImage, incomingLabel);
 }
 
 function getAudioMimeType(path) {
 
-    const lower =
-        path.toLowerCase();
-
-
+    const lower = path.toLowerCase();
     if (lower.endsWith(".mp3")) {
         return "audio/mpeg";
     }
-
-
     if (lower.endsWith(".wav")) {
         return "audio/wav";
     }
-
-
     if (lower.endsWith(".ogg")) {
         return "audio/ogg";
     }
-
-
     if (lower.endsWith(".flac")) {
         return "audio/flac";
     }
-
-
     if (lower.endsWith(".m4a")) {
         return "audio/mp4";
     }
-
-
     return "application/octet-stream";
 }
 
 function updateControls() {
-
-    const hasAudio =
-        Boolean(
-            audio.getAttribute("src")
-        );
-
-    const canAnalyze =
-        Boolean(
-            state.audioPath ||
-            state.uploadedFileName
-        );
-
-
-    loadButton.disabled =
-        state.loading || state.analyzing;
-
-    analyzeButton.disabled =
-        !canAnalyze ||
-        state.loading ||
-        state.analyzing;
-
-    playPauseButton.disabled =
-        !hasAudio;
-
-    stopButton.disabled =
-        !hasAudio;
-
-    seekSlider.disabled =
-        !hasAudio;
+    const hasAudio = Boolean(audio.getAttribute("src"));
+    const canAnalyze = Boolean(state.audioPath || state.uploadedFileName);
+    loadButton.disabled = state.loading || state.analyzing;
+    analyzeButton.disabled = !canAnalyze || state.loading || state.analyzing;
+    playPauseButton.disabled = !hasAudio;
+    stopButton.disabled = !hasAudio;
+    seekSlider.disabled = !hasAudio;
 }
 
 async function browseLocalAudio() {
-
     let selected;
-
-
     try {
         selected = await open({
             multiple: false,
@@ -1061,29 +1080,16 @@ async function browseLocalAudio() {
     } catch (error) {
 
         console.error(error);
-
-        status.textContent =
-            `Could not open the file picker: ${error}`;
-
+        status.textContent = `Could not open the file picker: ${error}`;
         return;
     }
-
-
     if (!selected) {
         return;
     }
-
-
     state.loading = true;
-
     updateControls();
-
-    status.textContent =
-        "Loading audio...";
-
-
+    status.textContent = "Loading audio...";
     try {
-
         const audioBytes =
             await invoke(
                 "load_audio_file",
@@ -1091,18 +1097,7 @@ async function browseLocalAudio() {
                     path: selected
                 }
             );
-
-
-        const name =
-            selected
-                .replaceAll(
-                    "\\",
-                    "/"
-                )
-                .split("/")
-                .pop();
-
-
+        const name = selected.replaceAll("\\", "/").split("/").pop();
         applyLoadedAudio({
             name,
             bytes:
@@ -1119,50 +1114,30 @@ async function browseLocalAudio() {
 
         console.error(error);
 
-        status.textContent =
-            `Could not load audio: ${error}`;
+        status.textContent = `Could not load audio: ${error}`;
 
     } finally {
-
         state.loading = false;
-
         updateControls();
     }
 }
 
 async function loadSelectedLibrarySong() {
 
-    const index =
-        libraryState.selectedIndex;
+    const index = libraryState.selectedIndex;
 
 
-    if (
-        index < 0 ||
-        index >=
-            libraryState.songs.length
-    ) {
+    if (index < 0 ||index >= libraryState.songs.length) {
         return;
     }
-
-
     const song =
         libraryState.songs[index];
-
-
-    loadLibrarySongButton.disabled =
-        true;
-
+    loadLibrarySongButton.disabled = true;
     state.loading = true;
 
     updateControls();
-
-
-    audioLibraryStatus.textContent =
-        `Loading ${song.name}...`;
-
-
+    audioLibraryStatus.textContent = `Loading ${song.name}...`;
     try {
-
         const audioBytes =
             await invoke(
                 "load_uploaded_audio",
@@ -1193,24 +1168,12 @@ async function loadSelectedLibrarySong() {
     } catch (error) {
 
         console.error(error);
-
-
-        audioLibraryStatus.classList.add(
-            "error"
-        );
-
-
-        audioLibraryStatus.textContent =
-            `Could not load ${song.name}: ${error}`;
-
-
-        loadLibrarySongButton.disabled =
-            false;
+        audioLibraryStatus.classList.add("error");
+        audioLibraryStatus.textContent = `Could not load ${song.name}: ${error}`;
+        loadLibrarySongButton.disabled = false;
 
     } finally {
-
         state.loading = false;
-
         updateControls();
     }
 }
@@ -1220,33 +1183,24 @@ async function analyzeAudio() {
         status.textContent = "Please load an audio file first.";
         return;
     }
-
     if (state.analyzing) {
         return;
     }
-
     state.analyzing = true;
-
     updateControls();
 
-    status.textContent =
-        "Analyzing audio...";
-
-    emptyState.textContent =
-        "Loading analysis...";
+    status.textContent = "Analyzing audio...";
+    emptyState.textContent = "Loading analysis...";
 
     try {
         let result;
-
-
         if (state.uploadedFileName) {
 
             /*
             * Song came from runtime/uploads.
             */
             result =
-                await invoke(
-                    "analyze_uploaded_audio",
+                await invoke("analyze_uploaded_audio",
                     {
                         filename:
                             state.uploadedFileName,
@@ -1275,53 +1229,38 @@ async function analyzeAudio() {
                 );
         }
 
-        console.log(
-            "Analysis result:",
-            result
-        );
+        console.log("Analysis result:", result);
 
-        state.chords =
-            result.chords ?? [];
+        state.chords = result.chords ?? [];
 
-        state.analysisDuration =
-            result.duration ?? 0;
+        updateCapoRecommendation();
+
+        state.analysisDuration = result.duration ?? 0;
 
         state.lastActiveChordIndex = null;
 
-        status.textContent =
-            `Analysis complete. ` +
-            `${state.chords.length} chords found.`;
+        status.textContent = `Analysis complete. ` + `${state.chords.length} chords found.`;
 
         if (state.chords.length) {
-
             emptyState.classList.add("hidden");
-
             chordDisplay.classList.remove("hidden");
-
             updateChordDisplay();
 
         } else {
-
             chordDisplay.classList.add("hidden");
-
-            emptyState.textContent =
-                "No chords were detected in this audio.";
-
+            emptyState.textContent = "No chords were detected in this audio.";
             emptyState.classList.remove("hidden");
         }
 
     } catch (error) {
         console.error(error);
 
-        status.textContent =
-            `Analysis failed: ${error}`;
+        status.textContent = `Analysis failed: ${error}`;
 
-        emptyState.textContent =
-            "Analysis failed.";
+        emptyState.textContent = "Analysis failed.";
 
     } finally {
         state.analyzing = false;
-
         updateControls();
     }
 }
@@ -1334,29 +1273,19 @@ async function togglePlayback() {
      * source came from a local filesystem path.
      */
     if (!audio.getAttribute("src")) {
-        status.textContent =
-            "Load an audio file before starting playback.";
+        status.textContent = "Load an audio file before starting playback.";
         return;
     }
 
     if (audio.paused) {
         try {
-
             await audio.play();
-
         } catch (error) {
-
-            console.error(
-                "Playback failed:",
-                error
-            );
-
-            status.textContent =
-                `Playback failed: ${error}`;
+            console.error("Playback failed:", error);
+            status.textContent = `Playback failed: ${error}`;
         }
 
     } else {
-
         audio.pause();
     }
 }
@@ -1525,14 +1454,13 @@ seekSlider.addEventListener(
     "input",
     seekAudio
 );
-
+updateCapoControls();
+clearCapoRecommendation();
 audio.volume = Number(volumeSlider.value);
 
 updatePlayerUI();
 
-export async function loadRecordedAnalysis(
-    result
-) {
+export async function loadRecordedAnalysis(result) {
 
     /*
      * Stop any previously loaded song.
@@ -1548,6 +1476,9 @@ export async function loadRecordedAnalysis(
 
     state.chords =
         result.chords ?? [];
+
+    resetCapoForNewAudio();
+    updateCapoRecommendation();
 
     state.analysisDuration =
         result.duration ?? 0;
@@ -1813,5 +1744,40 @@ audioLibraryModal.addEventListener(
         ) {
             closeAudioLibrary();
         }
+    }
+);
+
+capoDownButton.addEventListener(
+    "click",
+    () => {
+        setCapo(
+            state.capo - 1
+        );
+    }
+);
+
+
+capoUpButton.addEventListener(
+    "click",
+    () => {
+        setCapo(
+            state.capo + 1
+        );
+    }
+);
+
+
+capoUseRecommendedButton.addEventListener(
+    "click",
+    () => {
+        if (
+            state.recommendedCapo === null
+        ) {
+            return;
+        }
+
+        setCapo(
+            state.recommendedCapo
+        );
     }
 );
