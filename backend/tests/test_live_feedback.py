@@ -360,42 +360,57 @@ class RecognizerSelectionTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "CHORDSENSE_LIVE_RECOGNIZER": "cnn",
             "CHORDSENSE_DSP_SHADOW": "1",
-        }):
+        }, clear=True):
             session = LiveFeedbackSession(recognizer_factory=FakeRecognizer)
             self.assertIs(session.shadow_factory, StreamingTemplateRecognizer)
         with patch.dict(os.environ, {
             "CHORDSENSE_LIVE_RECOGNIZER": "template",
             "CHORDSENSE_DSP_SHADOW": "1",
-        }):
+        }, clear=True):
+            session = LiveFeedbackSession(recognizer_factory=FakeTemplateRecognizer)
+            self.assertIsNone(session.shadow_factory)
+        with patch.dict(os.environ, {"CHORDSENSE_DSP_SHADOW": "1"}, clear=True):
             session = LiveFeedbackSession(recognizer_factory=FakeTemplateRecognizer)
             self.assertIsNone(session.shadow_factory)
 
-    def test_template_mode_does_not_require_hef_or_manifest(self):
+    def test_default_and_explicit_template_modes_do_not_require_hef_or_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
             missing = str(Path(directory) / "does-not-exist")
-            with patch.dict(os.environ, {
-                "CHORDSENSE_LIVE_RECOGNIZER": "template",
-                "CHORDSENSE_LIVE_HEF": missing,
-                "CHORDSENSE_LIVE_MANIFEST": missing,
-            }):
-                recognizer = load_live_recognizer()
-                try:
-                    self.assertEqual(type(recognizer).__name__, "StreamingTemplateRecognizer")
-                finally:
-                    recognizer.close()
-
-    def test_default_and_cnn_modes_still_require_verified_hef(self):
-        with tempfile.TemporaryDirectory() as directory:
-            missing = str(Path(directory) / "does-not-exist")
-            for mode in (None, "cnn"):
+            for mode in (None, "template"):
                 with self.subTest(mode=mode), patch.dict(os.environ, {
                     "CHORDSENSE_LIVE_HEF": missing,
                     "CHORDSENSE_LIVE_MANIFEST": missing,
                 }, clear=True):
                     if mode is not None:
                         os.environ["CHORDSENSE_LIVE_RECOGNIZER"] = mode
-                    with self.assertRaisesRegex(RuntimeError, "HEF and manifest"):
-                        load_live_recognizer()
+                    recognizer = load_live_recognizer()
+                    try:
+                        self.assertIsInstance(recognizer, StreamingTemplateRecognizer)
+                    finally:
+                        recognizer.close()
+
+    def test_explicit_cnn_mode_still_requires_verified_hef(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = str(Path(directory) / "does-not-exist")
+            with patch.dict(os.environ, {
+                "CHORDSENSE_LIVE_RECOGNIZER": "cnn",
+                "CHORDSENSE_LIVE_HEF": missing,
+                "CHORDSENSE_LIVE_MANIFEST": missing,
+            }, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "HEF and manifest"):
+                    load_live_recognizer()
+
+            hef = Path(directory) / "candidate.hef"
+            manifest = Path(directory) / "candidate.json"
+            hef.write_bytes(b"candidate")
+            manifest.write_text(json.dumps({"pi_verified": False}), encoding="utf-8")
+            with patch.dict(os.environ, {
+                "CHORDSENSE_LIVE_RECOGNIZER": "cnn",
+                "CHORDSENSE_LIVE_HEF": str(hef),
+                "CHORDSENSE_LIVE_MANIFEST": str(manifest),
+            }, clear=True):
+                with self.assertRaisesRegex(ValueError, "Pi Torch/Hailo verification"):
+                    load_live_recognizer()
 
     def test_unknown_recognizer_mode_is_rejected(self):
         with patch.dict(os.environ, {"CHORDSENSE_LIVE_RECOGNIZER": "typo"}):

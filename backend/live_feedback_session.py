@@ -1,4 +1,4 @@
-"""One background guitar stream and causal CNN session for playback feedback."""
+"""One background guitar stream and live recognizer for playback feedback."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_LIVE_HEF = BASE_DIR / "models/chordsense_cnn/checkpoints/chordsense_live.hef"
 DEFAULT_LIVE_MANIFEST = BASE_DIR / "models/chordsense_cnn/checkpoints/chordsense_live.json"
 SAMPLE_RATE = 22_050
+DEFAULT_LIVE_RECOGNIZER = "template"
 
 
 class FeedbackBusyError(RuntimeError):
@@ -43,8 +44,8 @@ LiveRecognizer = StreamingChordRecognizer | StreamingTemplateRecognizer
 
 
 def load_live_recognizer() -> LiveRecognizer:
-    """Load the validated HEF, or an explicitly selected DSP experiment."""
-    mode = os.environ.get("CHORDSENSE_LIVE_RECOGNIZER", "cnn").lower()
+    """Load the DSP template by default, or an explicitly selected verified HEF."""
+    mode = os.environ.get("CHORDSENSE_LIVE_RECOGNIZER", DEFAULT_LIVE_RECOGNIZER).lower()
     if mode == "template":
         return StreamingTemplateRecognizer()
     if mode != "cnn":
@@ -106,7 +107,9 @@ class LiveFeedbackSession:
         if (
             self.shadow_factory is None
             and os.environ.get("CHORDSENSE_DSP_SHADOW") == "1"
-            and os.environ.get("CHORDSENSE_LIVE_RECOGNIZER", "cnn").lower() == "cnn"
+            and os.environ.get(
+                "CHORDSENSE_LIVE_RECOGNIZER", DEFAULT_LIVE_RECOGNIZER
+            ).lower() == "cnn"
         ):
             self.shadow_factory = StreamingTemplateRecognizer
         self._condition = threading.Condition()
