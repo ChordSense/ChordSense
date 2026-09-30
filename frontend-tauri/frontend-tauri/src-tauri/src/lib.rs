@@ -1,3 +1,10 @@
+mod feedback_bridge;
+
+use feedback_bridge::{
+    FeedbackBridge, pause_live_feedback, resume_live_feedback,
+    start_live_feedback, stop_live_feedback,
+};
+
 // Checks if there is a connection to the backend
 #[tauri::command]
 async fn backend_health() -> Result<String, String> {
@@ -13,6 +20,7 @@ async fn backend_health() -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(FeedbackBridge::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(
@@ -28,7 +36,15 @@ pub fn run() {
                 begin_recording,
                 end_recording,
 
-                load_audio_file
+                start_live_feedback,
+                pause_live_feedback,
+                resume_live_feedback,
+                stop_live_feedback,
+
+                load_audio_file,
+
+                playback_command,
+                playback_status
             ]
         )
         .run(tauri::generate_context!())
@@ -685,6 +701,57 @@ async fn end_recording()
         );
     }
 
+
+    Ok(payload)
+}
+
+/// Playback runs in iod (I2S DAC -> the pedal's headphone jack); the backend
+/// proxies it under /playback/*. `action` is one of load, play, pause, stop,
+/// seek, volume; `body` is that route's JSON (e.g. {"position_secs": 12.5}).
+/// Returns the backend's JSON response.
+#[tauri::command]
+async fn playback_command(
+    action: String,
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    const ACTIONS: [&str; 6] = ["load", "play", "pause", "stop", "seek", "volume"];
+    if !ACTIONS.contains(&action.as_str()) {
+        return Err(format!("Unknown playback action: {action}"));
+    }
+
+    let response = reqwest::Client::new()
+        .post(format!("{BACKEND_URL}/playback/{action}"))
+        .json(&body.unwrap_or_else(|| serde_json::json!({})))
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach backend for playback: {e}"))?;
+
+    playback_response(response).await
+}
+
+#[tauri::command]
+async fn playback_status() -> Result<serde_json::Value, String> {
+    let response = reqwest::get(format!("{BACKEND_URL}/playback/status"))
+        .await
+        .map_err(|e| format!("Could not reach backend for playback: {e}"))?;
+
+    playback_response(response).await
+}
+
+async fn playback_response(
+    response: reqwest::Response,
+) -> Result<serde_json::Value, String> {
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Could not parse playback response: {e}"))?;
+
+    if payload["success"].as_bool() != Some(true) {
+        return Err(payload["error"]
+            .as_str()
+            .unwrap_or("Playback command failed.")
+            .to_string());
+    }
 
     Ok(payload)
 }

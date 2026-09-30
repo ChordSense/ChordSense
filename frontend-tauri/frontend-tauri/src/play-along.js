@@ -2,6 +2,8 @@ import {
     chordForCapo,
     recommendCapo
 } from "./capo.js";
+import { FeedbackRater } from "./feedback-rating.js";
+
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
 
@@ -11,8 +13,6 @@ const state = {
     uploadedFileName: null,
 
     audioName: null,
-
-    audioObjectUrl: null,
 
     loading: false,
     analyzing: false,
@@ -29,7 +29,143 @@ const state = {
     isChordTransitioning: false,
 };
 
-const audio = document.querySelector("#audio-player");
+/*
+ * Audio plays in iod, out of the pedal's headphone jack (I2S DAC), not in
+ * this window. `player` mirrors the parts of an <audio> element this file
+ * uses (paused / currentTime / duration), so chord sync reads iod's clock:
+ * position is polled from the backend and interpolated between polls.
+ */
+const STATUS_POLL_MS = 250;
+
+const player = {
+    loaded: false,
+    paused: true,
+    duration: NaN,
+
+    // bumped by every command so a status poll that was already in flight
+    // can't undo it (e.g. report "paused" just after Play was pressed)
+    generation: 0,
+
+    // last position iod reported, and when (performance.now()) we got it
+    basePosition: 0,
+    baseTime: 0,
+
+    get currentTime() {
+        if (this.paused) {
+            return this.basePosition;
+        }
+
+        const elapsed =
+            (performance.now() - this.baseTime) / 1000;
+
+        const position =
+            this.basePosition + elapsed;
+
+        return Number.isFinite(this.duration)
+            ? Math.min(position, this.duration)
+            : position;
+    },
+
+    setPosition(position) {
+        this.basePosition = position;
+        this.baseTime = performance.now();
+    }
+};
+
+function playbackCommand(action, body = null) {
+    player.generation += 1;
+
+    return invoke(
+        "playback_command",
+        {
+            action,
+            body
+        }
+    );
+}
+
+/*
+ * source is {path} for a local file / recorded take,
+ * or {upload} for a song in the backend's uploads.
+ */
+async function loadPlayback(source) {
+    const result =
+        await playbackCommand(
+            "load",
+            source
+        );
+
+    player.loaded = true;
+    player.paused = true;
+    player.duration =
+        result.duration ?? NaN;
+    player.setPosition(0);
+
+    await playbackCommand(
+        "volume",
+        {
+            volume:
+                Number(volumeSlider.value)
+        }
+    );
+}
+
+async function syncPlaybackStatus() {
+    if (
+        !player.loaded ||
+        seekSlider.matches(":active")
+    ) {
+        return;
+    }
+
+    const generation =
+        player.generation;
+
+    let result;
+
+    try {
+        result =
+            await invoke("playback_status");
+    } catch (error) {
+        console.error(
+            "Playback status failed:",
+            error
+        );
+        return;
+    }
+
+    if (generation !== player.generation) {
+        return;
+    }
+
+    if (Number.isFinite(result.duration)) {
+        player.duration = result.duration;
+    }
+
+    const wasPaused = player.paused;
+
+    player.paused = !result.playing;
+    player.setPosition(
+        result.position ?? 0
+    );
+
+    if (result.finished) {
+        if (feedback.phase !== "idle") stopFeedback();
+    } else if (wasPaused !== player.paused) {
+        if (player.paused) pauseFeedback();
+        else if (feedback.enabled) void ensureFeedbackReady();
+    }
+
+    if (wasPaused !== player.paused) {
+        updatePlayerUI();
+        updateChordDisplay();
+    }
+}
+
+setInterval(
+    syncPlaybackStatus,
+    STATUS_POLL_MS
+);
 
 const loadButton = document.querySelector("#load-audio");
 const audioLibraryModal = document.querySelector("#audio-library-modal");
@@ -73,6 +209,234 @@ const songName =
 
 const status =
     document.querySelector("#status");
+
+const feedbackToggle = document.querySelector("#live-feedback-toggle");
+const feedbackStatus = document.querySelector("#feedback-status");
+const feedbackOverlay = document.querySelector("#feedback-screen-overlay");
+
+const feedback = {
+    enabled: false,
+    phase: "idle",
+    backendOwned: false,
+    sessionId: null,
+    generation: null,
+    rater: null,
+    epoch: 0,
+    cutoffUnixMs: 0,
+    queue: Promise.resolve(),
+    pending: null,
+    displayedRating: null,
+};
+
+function setFeedbackStatus(message) {
+    if (feedbackStatus.textContent !== message) feedbackStatus.textContent = message;
+}
+
+function renderFeedbackRating(rating) {
+    if (feedback.displayedRating === rating) return;
+    feedback.displayedRating = rating;
+    if (rating === "green" || rating === "red") {
+        feedbackOverlay.dataset.rating = rating;
+        feedbackOverlay.classList.add("visible");
+        setFeedbackStatus(rating === "green" ? "Chord match." : "Different chord.");
+    } else {
+        feedbackOverlay.classList.remove("visible");
+        if (rating === "yellow") setFeedbackStatus("Waiting for a clear chord match.");
+    }
+}
+
+function clearFeedbackEvaluation({ preserveGreen = false } = {}) {
+    feedback.cutoffUnixMs = Date.now();
+    if (preserveGreen && feedback.rater?.advance(player.currentTime).rating === "green") {
+        renderFeedbackRating("green");
+        return true;
+    }
+    feedback.rater?.reset(feedback.sessionId);
+    renderFeedbackRating(null);
+    return false;
+}
+
+function queueFeedback(action) {
+    const task = feedback.queue.then(action);
+    feedback.queue = task.catch(() => {});
+    return task;
+}
+
+function stopFeedback() {
+    const wasActive = feedback.phase !== "idle" ||
+        feedback.sessionId !== null || feedback.backendOwned;
+    feedback.epoch += 1;
+    feedback.phase = "idle";
+    feedback.sessionId = null;
+    feedback.generation = null;
+    feedback.rater = null;
+    clearFeedbackEvaluation();
+    let pending = feedback.queue;
+    if (wasActive) {
+        pending = queueFeedback(async () => {
+            if (!feedback.backendOwned) return;
+            await invoke("stop_live_feedback");
+            feedback.backendOwned = false;
+        }).catch(error => {
+            console.error("Could not stop live feedback:", error);
+            setFeedbackStatus(`Could not stop live feedback: ${error}`);
+        });
+    }
+    setFeedbackStatus(feedback.enabled ? "Live feedback ready." : "Live feedback off.");
+    return pending;
+}
+
+function pauseFeedback() {
+    if (feedback.phase !== "running") return;
+    const token = ++feedback.epoch;
+    feedback.phase = "paused";
+    clearFeedbackEvaluation();
+    setFeedbackStatus("Live feedback paused.");
+    void queueFeedback(() => invoke("pause_live_feedback")).catch(error => {
+        if (feedback.epoch !== token) return;
+        console.error("Could not pause live feedback:", error);
+        stopFeedback();
+        setFeedbackStatus(`Live feedback error: ${error}`);
+    });
+}
+
+const feedbackListenerReady = window.__TAURI__.event.listen(
+    "live-feedback-event",
+    ({ payload }) => {
+        if (!feedback.enabled || payload.session_id !== feedback.sessionId) return;
+        if (payload.generation != null && payload.generation !== feedback.generation) return;
+        if (payload.type === "status") {
+            const messages = {
+                warming_up: "Listening for your guitar…",
+                silence: "No guitar signal detected.",
+                stream_gap: "Audio stream interrupted; listening again…",
+                disconnected: "Live feedback disconnected; reconnecting…",
+                paused: "Live feedback paused.",
+            };
+            if (payload.status === "stopped" || payload.status === "error") {
+                const message = payload.error || "Live feedback stopped.";
+                stopFeedback();
+                setFeedbackStatus(message);
+                return;
+            }
+            if (messages[payload.status]) {
+                const preserved = payload.status !== "paused" &&
+                    clearFeedbackEvaluation({ preserveGreen: true });
+                if (!preserved) setFeedbackStatus(messages[payload.status]);
+            }
+            return;
+        }
+        if (payload.type !== "prediction" || feedback.phase !== "running" || player.paused) return;
+        if (payload.input_quality !== "ok") {
+            const preserved = clearFeedbackEvaluation({ preserveGreen: true });
+            if (!preserved) {
+                setFeedbackStatus(payload.input_quality === "clipping"
+                    ? "Guitar input is clipping; check the input signal and level."
+                    : "Waiting for a clear guitar signal…");
+            }
+            return;
+        }
+        const sampleAge = payload.sample_age_ms;
+        const emittedAt = payload.emitted_at_unix_ms;
+        if (typeof sampleAge !== "number" || typeof emittedAt !== "number") return;
+        const totalAge = sampleAge + Math.max(0, Date.now() - emittedAt);
+        if (!Number.isFinite(totalAge) ||
+            emittedAt - sampleAge < feedback.cutoffUnixMs) return;
+        const result = feedback.rater?.observe({
+            sessionId: feedback.sessionId,
+            sequence: payload.sequence,
+            playbackTimeSeconds: player.currentTime,
+            sampleAgeMs: totalAge,
+            chord: payload.chord,
+            inputQuality: payload.input_quality,
+            confidence: payload.confidence,
+            model: payload.model,
+            qualityUncertain: payload.quality_uncertain === true,
+        });
+        renderFeedbackRating(result?.rating ?? null);
+        if (!result?.rating && feedbackStatus.textContent !== "Listening for your guitar…") {
+            setFeedbackStatus("Listening for your guitar…");
+        }
+    }
+);
+
+async function ensureFeedbackReady() {
+    if (!feedback.enabled || !state.chords.length) {
+        if (feedback.enabled) setFeedbackStatus("Analyze the track before live feedback.");
+        return;
+    }
+    if (feedback.phase === "running") return;
+    if (feedback.phase === "starting") return feedback.pending;
+    const resuming = feedback.phase === "paused" && feedback.sessionId !== null;
+    const token = ++feedback.epoch;
+    feedback.phase = "starting";
+    clearFeedbackEvaluation();
+    setFeedbackStatus(resuming ? "Resuming live feedback…" : "Starting live feedback…");
+    const task = queueFeedback(async () => {
+        try {
+            await feedbackListenerReady;
+            if (feedback.epoch !== token) return;
+            if (!resuming && feedback.backendOwned) {
+                await invoke("stop_live_feedback");
+                feedback.backendOwned = false;
+            }
+            const response = await invoke(resuming
+                ? "resume_live_feedback" : "start_live_feedback");
+            feedback.backendOwned = true;
+            if (feedback.epoch !== token) return;
+            feedback.sessionId = response.session_id;
+            feedback.generation = response.generation;
+            feedback.rater = new FeedbackRater(state.chords);
+            feedback.rater.reset(feedback.sessionId);
+            feedback.phase = "running";
+            feedback.cutoffUnixMs = Date.now();
+            setFeedbackStatus("Listening for your guitar…");
+        } catch (error) {
+            if (feedback.epoch !== token) return;
+            console.error("Could not start live feedback:", error);
+            if (resuming) {
+                try {
+                    await invoke("stop_live_feedback");
+                    feedback.backendOwned = false;
+                } catch (stopError) {
+                    console.error("Could not release live feedback:", stopError);
+                }
+            }
+            feedback.phase = "idle";
+            feedback.sessionId = null;
+            feedback.rater = null;
+            setFeedbackStatus(`Live feedback unavailable: ${error}`);
+        }
+    });
+    feedback.pending = task;
+    await task;
+    if (feedback.pending === task) feedback.pending = null;
+}
+
+function advanceFeedback() {
+    if (feedback.phase !== "running" || player.paused) return;
+    const rating = feedback.rater?.advance(player.currentTime).rating ?? null;
+    if (rating !== feedback.displayedRating) {
+        renderFeedbackRating(rating);
+        if (!rating) setFeedbackStatus("Listening for your guitar…");
+    }
+}
+
+feedbackToggle.addEventListener("click", () => {
+    feedback.enabled = !feedback.enabled;
+    feedbackToggle.setAttribute("aria-pressed", String(feedback.enabled));
+    feedbackToggle.textContent = feedback.enabled
+        ? "Live Feedback: On" : "Live Feedback: Off";
+    if (feedback.enabled) {
+        if (!player.paused) void ensureFeedbackReady();
+        else setFeedbackStatus(state.chords.length
+            ? "Live feedback ready." : "Analyze the track before live feedback.");
+    } else {
+        stopFeedback();
+    }
+});
+
+setFeedbackStatus("Live feedback off.");
 
 const emptyState =
     document.querySelector("#empty-state");
@@ -529,34 +893,27 @@ function closeAudioLibrary() {
     loadButton.focus();
 }
 
-function clearAudioSource() {
+async function clearAudioSource() {
+    const feedbackStopped = stopFeedback();
+    const playbackStopped = player.loaded
+        ? playbackCommand("stop")
+        : Promise.resolve();
 
-    audio.pause();
+    player.loaded = false;
+    player.paused = true;
+    player.duration = NaN;
+    player.setPosition(0);
 
-    audio.removeAttribute("src");
-
-    audio.load();
-
-
-    if (state.audioObjectUrl) {
-
-        URL.revokeObjectURL(
-            state.audioObjectUrl
-        );
-
-        state.audioObjectUrl =
-            null;
-    }
+    await Promise.all([feedbackStopped, playbackStopped]);
 }
 
-function applyLoadedAudio({
+async function applyLoadedAudio({
     name,
-    bytes,
     localPath = null,
     uploadedFileName = null
 }) {
 
-    clearAudioSource();
+    await clearAudioSource();
 
 
     state.audioPath =
@@ -601,33 +958,11 @@ function applyLoadedAudio({
     );
 
 
-    const audioBlob =
-        new Blob(
-            [
-                new Uint8Array(
-                    bytes
-                )
-            ],
-            {
-                type:
-                    getAudioMimeType(
-                        name
-                    )
-            }
-        );
-
-
-    state.audioObjectUrl =
-        URL.createObjectURL(
-            audioBlob
-        );
-
-
-    audio.src =
-        state.audioObjectUrl;
-
-
-    audio.load();
+    await loadPlayback(
+        localPath
+            ? { path: localPath }
+            : { upload: uploadedFileName }
+    );
 
     updatePlayerUI();
 }
@@ -927,7 +1262,7 @@ function updateChordDisplay() {
         return;
     }
 
-    const time = audio.currentTime || 0;
+    const time = player.currentTime || 0;
 
     const {
         index,
@@ -1026,29 +1361,8 @@ function renderChordSet(previous, current, next, incoming) {
     displayChord(incoming, incomingImage, incomingLabel);
 }
 
-function getAudioMimeType(path) {
-
-    const lower = path.toLowerCase();
-    if (lower.endsWith(".mp3")) {
-        return "audio/mpeg";
-    }
-    if (lower.endsWith(".wav")) {
-        return "audio/wav";
-    }
-    if (lower.endsWith(".ogg")) {
-        return "audio/ogg";
-    }
-    if (lower.endsWith(".flac")) {
-        return "audio/flac";
-    }
-    if (lower.endsWith(".m4a")) {
-        return "audio/mp4";
-    }
-    return "application/octet-stream";
-}
-
 function updateControls() {
-    const hasAudio = Boolean(audio.getAttribute("src"));
+    const hasAudio = player.loaded;
     const canAnalyze = Boolean(state.audioPath || state.uploadedFileName);
     loadButton.disabled = state.loading || state.analyzing;
     analyzeButton.disabled = !canAnalyze || state.loading || state.analyzing;
@@ -1090,18 +1404,9 @@ async function browseLocalAudio() {
     updateControls();
     status.textContent = "Loading audio...";
     try {
-        const audioBytes =
-            await invoke(
-                "load_audio_file",
-                {
-                    path: selected
-                }
-            );
         const name = selected.replaceAll("\\", "/").split("/").pop();
-        applyLoadedAudio({
+        await applyLoadedAudio({
             name,
-            bytes:
-                audioBytes,
 
             localPath:
                 selected,
@@ -1138,22 +1443,9 @@ async function loadSelectedLibrarySong() {
     updateControls();
     audioLibraryStatus.textContent = `Loading ${song.name}...`;
     try {
-        const audioBytes =
-            await invoke(
-                "load_uploaded_audio",
-                {
-                    filename:
-                        song.name
-                }
-            );
-
-
-        applyLoadedAudio({
+        await applyLoadedAudio({
             name:
                 song.name,
-
-            bytes:
-                audioBytes,
 
             localPath:
                 null,
@@ -1186,6 +1478,8 @@ async function analyzeAudio() {
     if (state.analyzing) {
         return;
     }
+    stopFeedback();
+
     state.analyzing = true;
     updateControls();
 
@@ -1245,6 +1539,8 @@ async function analyzeAudio() {
                 `Loaded saved analysis. ` +
                 `${state.chords.length} chords found.`;
 
+            if (feedback.enabled && !player.paused) void ensureFeedbackReady();
+
         } else {
 
             status.textContent =
@@ -1278,46 +1574,107 @@ async function analyzeAudio() {
 
 async function togglePlayback() {
 
-    /*
-     * Playback depends on whether the audio
-     * element has a source, not whether that
-     * source came from a local filesystem path.
-     */
-    if (!audio.getAttribute("src")) {
+    if (!player.loaded) {
         status.textContent = "Load an audio file before starting playback.";
         return;
     }
 
-    if (audio.paused) {
+    if (player.paused) {
         try {
-            await audio.play();
+            if (feedback.enabled) await ensureFeedbackReady();
+
+            await playbackCommand("play");
+
+            const position = player.currentTime;
+            player.paused = false;
+            player.setPosition(position);
         } catch (error) {
             console.error("Playback failed:", error);
             status.textContent = `Playback failed: ${error}`;
+            stopFeedback();
         }
 
     } else {
-        audio.pause();
+        const position =
+            player.currentTime;
+
+        player.paused = true;
+        player.setPosition(position);
+        pauseFeedback();
+
+        try {
+            await playbackCommand("pause");
+        } catch (error) {
+            console.error(error);
+            status.textContent =
+                `Pause failed: ${error}`;
+        }
     }
+
+    updatePlayerUI();
 }
 
 export function stopPlayback() {
-    audio.pause();
-    audio.currentTime = 0;
+    const feedbackStopped = stopFeedback();
+    const playbackStopped = player.loaded
+        ? playbackCommand("stop").catch(console.error)
+        : Promise.resolve();
+
+    player.paused = true;
+    player.setPosition(0);
+
+    updatePlayerUI();
+    updateChordDisplay();
+    return Promise.all([feedbackStopped, playbackStopped]);
+}
+
+function setVolume() {
+    if (!player.loaded) {
+        return;
+    }
+
+    playbackCommand(
+        "volume",
+        {
+            volume:
+                Number(volumeSlider.value)
+        }
+    ).catch(console.error);
+}
+
+// while dragging: move the display only
+function previewSeek() {
+    player.setPosition(
+        Number(seekSlider.value)
+    );
+
+    state.lastActiveChordIndex = null;
 
     updatePlayerUI();
     updateChordDisplay();
 }
 
-function setVolume() {
-    audio.volume =
-        Number(volumeSlider.value);
-}
-
-// for using slider in the playback
+// on release: actually move iod's playback position
 function seekAudio() {
-    audio.currentTime =
+    const position =
         Number(seekSlider.value);
+
+    player.setPosition(position);
+    clearFeedbackEvaluation();
+    if (feedback.enabled && feedback.phase === "running") {
+        setFeedbackStatus("Listening for your guitar…");
+    }
+
+    playbackCommand(
+        "seek",
+        {
+            position_secs: position
+        }
+    ).catch(error => {
+        console.error(error);
+        status.textContent =
+            `Seek failed: ${error}`;
+    });
 
     state.lastActiveChordIndex = null;
 
@@ -1327,8 +1684,8 @@ function seekAudio() {
 
 function getDuration() {
     const audioDuration =
-        Number.isFinite(audio.duration)
-            ? audio.duration
+        Number.isFinite(player.duration)
+            ? player.duration
             : 0;
 
     return Math.max(
@@ -1346,21 +1703,21 @@ function updatePlayerUI() {
 
     if (!seekSlider.matches(":active")) {
         seekSlider.value =
-            audio.currentTime || 0;
+            player.currentTime || 0;
     }
 
     timeDisplay.textContent =
-        `${formatTime(audio.currentTime)} / ` +
+        `${formatTime(player.currentTime)} / ` +
         `${formatTime(duration)}`;
 
     playPauseImage.src =
-        audio.paused
+        player.paused
             ? "assets/icons/play-button.png"
             : "assets/icons/pause.png";
 
     playPauseButton.setAttribute(
         "aria-label",
-        audio.paused ? "Play" : "Pause"
+        player.paused ? "Play" : "Pause"
     );
 
     updateControls();
@@ -1390,41 +1747,11 @@ function formatTime(seconds) {
     );
 }
 
-audio.addEventListener(
-    "timeupdate",
-    () => {
-        updatePlayerUI();
-        updateChordDisplay();
-    }
-);
-
-audio.addEventListener(
-    "loadedmetadata",
-    updatePlayerUI
-);
-
-audio.addEventListener(
-    "play",
-    updatePlayerUI
-);
-
-audio.addEventListener(
-    "pause",
-    updatePlayerUI
-);
-
-audio.addEventListener(
-    "ended",
-    () => {
-        updatePlayerUI();
-        updateChordDisplay();
-    }
-);
-
 function playbackLoop() {
-    if (!audio.paused) {
+    if (!player.paused) {
         updatePlayerUI();
         updateChordDisplay();
+        advanceFeedback();
     }
 
     requestAnimationFrame(
@@ -1463,11 +1790,15 @@ volumeSlider.addEventListener(
 
 seekSlider.addEventListener(
     "input",
-    seekAudio
+    previewSeek
 );
 updateCapoControls();
 clearCapoRecommendation();
-audio.volume = Number(volumeSlider.value);
+
+seekSlider.addEventListener(
+    "change",
+    seekAudio
+);
 
 updatePlayerUI();
 
@@ -1476,7 +1807,7 @@ export async function loadRecordedAnalysis(result) {
     /*
      * Stop any previously loaded song.
      */
-    clearAudioSource();
+    await clearAudioSource();
 
 
     state.audioPath = null;
@@ -1541,32 +1872,13 @@ export async function loadRecordedAnalysis(result) {
 
         try {
 
-            const audioBytes = await invoke(
-                "load_audio_file",
-                {
-                    path: wavPath
-                }
-            );
-
-            const audioBlob = new Blob(
-                [new Uint8Array(audioBytes)],
-                {
-                    type: getAudioMimeType(wavPath)
-                }
-            );
-
-            state.audioObjectUrl =
-                URL.createObjectURL(audioBlob);
-
-            audio.src =
-                state.audioObjectUrl;
-
-            audio.load();
+            await loadPlayback({
+                path: wavPath
+            });
 
             /*
-             * Setting this is what re-enables the transport
-             * controls: play/pause, stop and seek all bail
-             * out while audioPath is null.
+             * Also lets Analyze re-run the take through the
+             * Sense-mode model.
              */
             state.audioPath = wavPath;
 

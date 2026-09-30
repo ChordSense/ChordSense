@@ -116,7 +116,7 @@ holds the deployment values.
 | `CHORDSENSE_IOD_SOCKET` | `$XDG_RUNTIME_DIR/chordsense-iod.sock`, else `/run/chordsense/iod.sock` | Control socket path. |
 | `CHORDSENSE_SPI_DEVICE` | `/dev/spidev0.0` | spidev node for the MCP3201. |
 | `CHORDSENSE_CAPTURES_DIR` | `runtime/captures` under CWD (made absolute) | Where captured WAVs are written. Must be readable by the backend. |
-| `CHORDSENSE_I2S_DEVICE_MATCH` | unset | Case-insensitive substring of the ALSA output device name for the DAC. Unset → system default output (HDMI on the dev Pi) with a warning. |
+| `CHORDSENSE_I2S_DEVICE_MATCH` | unset (`hifiberry` in `run-dev.sh` and `chordsense-iod.env`) | Case-insensitive substring of the DAC's ALSA pcm id or card name; the card's `plughw:` pcm is preferred. `cargo run --release --example audio_outputs` lists them. If set and nothing matches, playback is **unavailable** (no HDMI fallback). Unset → system default output. |
 
 The SPI clock (`DEFAULT_SPI_MAX_SPEED_HZ`, 1 MHz) is a compile-time constant in
 `main.rs` — confirm it against the MCP3201's actual VDD before trusting capture.
@@ -152,12 +152,13 @@ Fields that don't apply to a given response are omitted.
 |---|---|---|---|
 | `start_capture` | — | `{"ok":true}` | Attaches a WAV sink to the live ADC feed. Errors if a capture or stream is already running. |
 | `stop_capture` | — | `{"ok":true,"wav_path":"/abs/capture-<ms>.wav","duration_s":4.2}` | Finalizes the WAV. `duration_s` is `samples_written / 22050`. Errors if no capture is running or nothing was recorded. |
-| `play` | `path` (abs path to an audio file) | `{"ok":true}` | Loads the file and starts playing on the DAC. Decodes via `rodio` (WAV/FLAC/MP3/OGG…). |
-| `pause` | — | `{"ok":true}` | Always OK. |
-| `resume` | — | `{"ok":true}` | Always OK. |
+| `load` | `path` (abs path to an audio file) | `{"ok":true,"duration_secs":214.2}` | Loads the file paused at 0. `duration_secs` omitted if the decoder can't tell. |
+| `play` | `path` (abs path to an audio file) | `{"ok":true,"duration_secs":214.2}` | `load` + `resume`. Decodes via `rodio` (WAV/FLAC/MP3/OGG…). |
+| `pause` | — | `{"ok":true}` | |
+| `resume` | — | `{"ok":true}` | After a track has finished, restarts it from 0. |
 | `stop_playback` | — | `{"ok":true}` | Stops and reloads the current file, so position returns to 0. |
 | `seek` | `position_secs` (number) | `{"ok":true}` | Errors if the decoder can't seek. |
-| `set_volume` | `volume` (0.0–1.0) | `{"ok":true}` | Always OK. Default volume 0.8. |
+| `set_volume` | `volume` (0.0–1.0, clamped) | `{"ok":true}` | Software volume (the PCM5102A has none). Default 0.8. |
 | `status` | — | see below | Snapshot of all state. |
 | `start_stream` | `frame_samples` (int, optional, default 441 ≈ 20 ms) | `{"ok":true}` then a push stream | See [Streaming](#streaming). Errors if a capture is running. |
 
@@ -172,12 +173,19 @@ Fields that don't apply to a given response are omitted.
   "playing": true,
   "paused": false,
   "position_secs": 1.20,
-  "duration_secs": 4.20
+  "duration_secs": 4.20,
+  "finished": false,
+  "path": "/home/chordsense/workspace/ChordSense/runtime/uploads/song.mp3",
+  "output_device": "plughw:CARD=sndrpihifiberry,DEV=0"
 }
 ```
 
-`duration_secs` is omitted if nothing is loaded for playback. `playing` is
-`true` only when a track is loaded, not paused, and not finished.
+`duration_secs` and `path` are omitted if nothing is loaded for playback;
+`output_device` if no audio output could be opened. `playing` is `true` only
+when a track is loaded, not paused, and not finished.
+
+All playback commands fail with `audio output is unavailable` when the daemon
+started without an output (DAC missing / busy); capture and streaming still work.
 
 Example control-connection traffic:
 
@@ -242,7 +250,8 @@ resamples onto an even 22050 Hz grid locked to wall-clock time, so
 | `cannot start stream while capturing` | `start_stream` while capturing |
 | `start_stream must be the only command sent on a connection` | any command after `start_stream` on the same connection |
 | `bad request: <detail>` | malformed JSON / unknown `cmd` |
-| `<rodio error>` | `play` / `seek` / `stop_playback` decoder failures |
+| `audio output is unavailable` | any playback command when no output device opened at startup |
+| `<rodio error>` | `load` / `play` / `seek` / `stop_playback` decoder failures |
 
 
 ## Talking to it from code
@@ -320,10 +329,20 @@ The userspace SPI reader is being starved (heavy CPU/bus load). RT priority via
 the service helps a lot; if it persists, the durable fix is the kernel
 `mcp320x` IIO driver with an hrtimer trigger, not more userspace tuning.
 
-**Playback warns `no output device matching '...'`.**
-`CHORDSENSE_I2S_DEVICE_MATCH` doesn't match any `aplay -l` device — it falls
-back to the default output. Set the match string once the PCM5102A's I2S
-`dtoverlay` is enabled.
+**Startup logs `audio output unavailable ... no audio output matching '...'`.**
+`CHORDSENSE_I2S_DEVICE_MATCH` doesn't match any ALSA output. Check
+`dtoverlay=hifiberry-dac` is in `/boot/firmware/config.txt` (then reboot) and
+`aplay -l` shows `sndrpihifiberry`; `cargo run --release --example
+audio_outputs` shows what iod can see.
+
+**No sound from the headphone jack even though `status` shows playback advancing.**
+The problem is on the hardware side. Use `iod/deploy/dac_test.sh tone` and follow the debug order in
+`docs/audio-output.md` (clock frequencies at the DAC, MCK/MU/FM levels, LOUT, then the output stage).
+
+**Startup logs `failed to open 'plughw:CARD=sndrpihifiberry...': ... busy`.**
+Something else holds the DAC, usually the desktop's PipeWire. Install
+`iod/deploy/wireplumber/51-chordsense-dac.conf` (instructions inside) so
+WirePlumber leaves the card alone, then restart iod.
 
 **`Permission denied` opening `/dev/spidev0.0`.**
 The service user must be in the `spi` group (`chordsense` already is). Check

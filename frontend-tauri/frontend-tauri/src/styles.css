@@ -119,6 +119,7 @@ body {
     display: flex;
 
     align-items: center;
+    flex-wrap: wrap;
     gap: clamp(8px, 1vw, 18px);
 }
 
@@ -156,6 +157,39 @@ body {
     opacity: 0.45;
 
     cursor: default;
+}
+
+#live-feedback-toggle[aria-pressed="true"] {
+    background: #205d3b;
+}
+
+.feedback-status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.feedback-screen-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 180ms ease;
+}
+
+.feedback-screen-overlay[data-rating="green"] { background: rgba(28, 170, 73, 0.10); }
+.feedback-screen-overlay[data-rating="red"] { background: rgba(198, 45, 45, 0.10); }
+.feedback-screen-overlay.visible { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+    .feedback-screen-overlay { transition: none; }
 }
 
 .volume-control {
@@ -615,6 +649,9 @@ body {
         min(34vh, 420px);
 
     object-fit: contain;
+
+    /* The diagram artwork reserves space on the left for fret markers. */
+    transform: translateX(clamp(-24px, -2vh, -12px));
 
     display: block;
 }

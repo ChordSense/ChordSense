@@ -1,15 +1,18 @@
 import atexit
+import json
 import os
 import subprocess
 import tempfile
+import threading
+from contextlib import closing
 from pathlib import Path
 import time
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 from werkzeug.utils import secure_filename
 
 from iod_client import IodClient, IodError
-from web_upload import web_upload
+from web_upload import ALLOWED_AUDIO_EXTENSIONS, UPLOADS_DIR, web_upload
 
 from analysis_cache import (
     identify_audio,
@@ -41,28 +44,36 @@ app.register_blueprint(web_upload)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
 iod = IodClient()
-recording_recognizer = None
+live_feedback_session = None
+live_feedback_session_lock = threading.Lock()
 
 
-def get_recording_recognizer():
-    global recording_recognizer
-    if recording_recognizer is None:
-        from models.chordsense_cnn.chord_recognition import (
-            HailoChordRecognizer,
-            OFFLINE_POSTPROCESSING,
-        )
+def create_recording_recognizer():
+    from models.chordsense_cnn.chord_recognition import (
+        HailoChordRecognizer,
+        OFFLINE_POSTPROCESSING,
+    )
 
-        recording_recognizer = HailoChordRecognizer(
-            CUSTOM_MODEL_HEF,
-            postprocessing=OFFLINE_POSTPROCESSING,
-        )
-    return recording_recognizer
+    return HailoChordRecognizer(
+        CUSTOM_MODEL_HEF,
+        postprocessing=OFFLINE_POSTPROCESSING,
+    )
+
+
+def get_live_feedback_session():
+    global live_feedback_session
+    with live_feedback_session_lock:
+        if live_feedback_session is None:
+            from live_feedback_session import LiveFeedbackSession
+
+            live_feedback_session = LiveFeedbackSession(iod=iod)
+    return live_feedback_session
 
 
 @atexit.register
-def close_recording_recognizer():
-    if recording_recognizer is not None:
-        recording_recognizer.close()
+def close_live_feedback_session():
+    if live_feedback_session is not None:
+        live_feedback_session.stop()
 
 
 def parse_lab_file(lab_path: Path):
@@ -395,7 +406,8 @@ def begin_recording():
         })
     except IodError as e:
         print(f"Begin recording failed: {e}", flush=True)
-        return jsonify({"success": False, "error": str(e)}), 502
+        status = 409 if "stream" in str(e).lower() else 502
+        return jsonify({"success": False, "error": str(e)}), status
     except Exception as e:
         print(f"Begin recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
@@ -412,10 +424,12 @@ def end_recording():
         print(f"Capture written to {wav_path} ({capture_duration:.2f}s)", flush=True)
 
         print("Running whole-recording inference on Hailo...", flush=True)
-        recognizer = get_recording_recognizer()
-        result = recognizer.analyze_file(wav_path)
-        if not recognizer.write_lab_file(result, output_lab_path):
-            raise RuntimeError("Chord recognition produced no output")
+        # Release the device before live feedback opens its own HEF. Keeping
+        # this recognizer cached pins the only physical Hailo device.
+        with closing(create_recording_recognizer()) as recognizer:
+            result = recognizer.analyze_file(wav_path)
+            if not recognizer.write_lab_file(result, output_lab_path):
+                raise RuntimeError("Chord recognition produced no output")
         chords = [
             {
                 "start": segment.start,
@@ -447,6 +461,174 @@ def end_recording():
     except Exception as e:
         print(f"End recording failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.post("/feedback/start")
+def start_live_feedback():
+    from live_feedback_session import FeedbackBusyError
+
+    try:
+        return jsonify({"success": True, **get_live_feedback_session().start()}), 201
+    except FeedbackBusyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 503
+
+
+@app.post("/feedback/pause")
+def pause_live_feedback():
+    from live_feedback_session import FeedbackStateError
+
+    try:
+        return jsonify({"success": True, **get_live_feedback_session().pause()})
+    except FeedbackStateError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+
+
+@app.post("/feedback/resume")
+def resume_live_feedback():
+    from live_feedback_session import FeedbackStateError
+
+    try:
+        return jsonify({"success": True, **get_live_feedback_session().resume()})
+    except FeedbackStateError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+    except IodError as exc:
+        status = 409 if "captur" in str(exc).lower() else 502
+        return jsonify({"success": False, "error": str(exc)}), status
+
+
+@app.post("/feedback/stop")
+def stop_live_feedback():
+    try:
+        return jsonify({"success": True, **get_live_feedback_session().stop()})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.get("/feedback/status")
+def live_feedback_status():
+    return jsonify({"success": True, **get_live_feedback_session().status()})
+
+
+@app.get("/feedback/events")
+def live_feedback_events():
+    from live_feedback_session import FeedbackStateError
+
+    session = get_live_feedback_session()
+    session_id = request.args.get("session_id", "")
+    try:
+        after = max(0, int(request.args.get("after", "0")))
+    except ValueError:
+        return jsonify({"success": False, "error": "invalid after sequence"}), 400
+    if session_id != session.status()["session_id"]:
+        return jsonify({"success": False, "error": "unknown feedback session"}), 404
+
+    def generate():
+        sequence = after
+        while True:
+            try:
+                event = session.wait_event(session_id, sequence)
+            except FeedbackStateError:
+                break
+            if event is None:
+                yield ": keepalive\n\n"
+                if session.status()["state"] == "idle":
+                    break
+                continue
+            sequence = event["sequence"]
+            yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+            if event.get("status") in {"stopped", "error"}:
+                break
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+# -- playback: iod plays audio out of the I2S DAC to the pedal's headphone jack --
+
+def _iod_call(action):
+    try:
+        return jsonify({"success": True, **(action() or {})})
+    except IodError as e:
+        print(f"Playback command failed: {e}", flush=True)
+        return jsonify({"success": False, "error": str(e)}), 502
+
+
+def _resolve_playback_path(body: dict) -> Path:
+    """An uploaded song by name (``upload``) or a local file (``path``)."""
+    if body.get("upload"):
+        path = UPLOADS_DIR / secure_filename(body["upload"])
+    elif body.get("path"):
+        path = Path(body["path"]).expanduser().resolve()
+    else:
+        raise ValueError("Provide 'path' or 'upload'")
+    if path.suffix.lower() not in ALLOWED_AUDIO_EXTENSIONS:
+        raise ValueError(f"Unsupported audio type: {path.suffix}")
+    if not path.is_file():
+        raise ValueError(f"Audio file not found: {path}")
+    return path
+
+
+@app.post("/playback/load")
+def playback_load():
+    try:
+        path = _resolve_playback_path(request.get_json(silent=True) or {})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    return _iod_call(lambda: {"path": str(path), "duration": iod.load(path)})
+
+
+@app.post("/playback/play")
+def playback_play():
+    return _iod_call(iod.resume)
+
+
+@app.post("/playback/pause")
+def playback_pause():
+    return _iod_call(iod.pause)
+
+
+@app.post("/playback/stop")
+def playback_stop():
+    return _iod_call(iod.stop_playback)
+
+
+@app.post("/playback/seek")
+def playback_seek():
+    body = request.get_json(silent=True) or {}
+    try:
+        position = float(body["position_secs"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"success": False, "error": "position_secs is required"}), 400
+    return _iod_call(lambda: iod.seek(position))
+
+
+@app.post("/playback/volume")
+def playback_volume():
+    body = request.get_json(silent=True) or {}
+    try:
+        volume = float(body["volume"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"success": False, "error": "volume is required"}), 400
+    return _iod_call(lambda: iod.set_volume(volume))
+
+
+@app.get("/playback/status")
+def playback_status():
+    def status():
+        s = iod.status()
+        return {
+            "playing": s.get("playing", False),
+            "paused": s.get("paused", False),
+            "finished": s.get("finished", False),
+            "position": s.get("position_secs", 0.0),
+            "duration": s.get("duration_secs"),
+            "path": s.get("path"),
+            "output_device": s.get("output_device"),
+        }
+    return _iod_call(status)
 
 
 if __name__ == "__main__":

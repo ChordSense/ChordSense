@@ -68,6 +68,10 @@
                 Analyze
             </button>
 
+            <button id="live-feedback-toggle" type="button" aria-pressed="false">
+                Live Feedback: Off
+            </button>
+
             <label class="volume-control">
                 Volume
 
@@ -140,6 +144,7 @@
         </section>
 
         <p id="status" role="status" aria-live="polite"></p>
+        <p id="feedback-status" class="feedback-status" role="status" aria-live="polite"></p>
 
         <!-- NOW PLAYING -->
         <section class="now-playing">
@@ -342,8 +347,8 @@
 
     </section>
 
-    <!-- actual audio engine -->
-    <audio id="audio-player"></audio>
+    <!-- live rating overlay -->
+    <div id="feedback-screen-overlay" class="feedback-screen-overlay" aria-hidden="true"></div>
 
     <!-- CHORDSENSE LIBRARY -->
     <div

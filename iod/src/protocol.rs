@@ -15,10 +15,12 @@
 //! -> {"cmd":"stop_capture"}
 //! <- {"ok":true,"wav_path":"/.../runtime/captures/20260826-...wav","duration_s":4.2}
 //!
-//! -> {"cmd":"play","path":"/.../runtime/outputs/song.wav"}
+//! -> {"cmd":"load","path":"/.../runtime/uploads/song.mp3"}
+//! <- {"ok":true,"duration_secs":212.4}
+//! -> {"cmd":"resume"}
 //! <- {"ok":true}
 //! -> {"cmd":"status"}
-//! <- {"ok":true,"capturing":false,"streaming":false,"stream_subscribers":0,"playing":true,"paused":false,"position_secs":1.2,"duration_secs":4.2}
+//! <- {"ok":true,"capturing":false,"streaming":false,"stream_subscribers":0,"playing":true,"paused":false,"position_secs":1.2,"duration_secs":212.4,"finished":false,"path":"/.../song.mp3","output_device":"..."}
 //!
 //! -> {"cmd":"start_stream"}
 //! <- {"ok":true}
@@ -47,6 +49,9 @@ use crate::i2s::Playback;
 enum Command {
     StartCapture,
     StopCapture,
+    /// load a file paused at 0 (responds with its duration_secs if known)
+    Load { path: String },
+    /// load a file and start playing it
     Play { path: String },
     Pause,
     Resume,
@@ -86,6 +91,12 @@ struct Response {
     position_secs: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finished: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_device: Option<String>,
 }
 
 impl Response {
@@ -102,6 +113,7 @@ impl Response {
 #[derive(Serialize)]
 struct StreamFrameMsg {
     sample_index: u64,
+    captured_at_ns: u64,
     playback_position_secs: f64,
     /// base64-encoded little-endian pcm16 samples
     samples: String,
@@ -109,12 +121,12 @@ struct StreamFrameMsg {
 
 pub struct Daemon {
     sampler: AdcSampler,
-    playback: Arc<Mutex<Playback>>,
+    playback: Arc<Mutex<Option<Playback>>>,
     captures_dir: PathBuf,
 }
 
 impl Daemon {
-    pub fn new(sampler: AdcSampler, playback: Playback, captures_dir: PathBuf) -> Self {
+    pub fn new(sampler: AdcSampler, playback: Option<Playback>, captures_dir: PathBuf) -> Self {
         Self {
             sampler,
             playback: Arc::new(Mutex::new(playback)),
@@ -204,9 +216,11 @@ impl Daemon {
     /// disconnects (write fails) or the channel is torn down
     fn forward_stream(&self, writer: &mut UnixStream, rx: Receiver<SampleFrame>) {
         while let Ok(frame) = rx.recv() {
-            let playback_position_secs = self.playback.lock().unwrap().position_secs();
+            let playback_position_secs = self.playback.lock().unwrap().as_ref()
+                .map(Playback::position_secs).unwrap_or(0.0);
             let msg = StreamFrameMsg {
                 sample_index: frame.sample_index,
+                captured_at_ns: frame.captured_at_ns,
                 playback_position_secs,
                 samples: BASE64.encode(pcm16_to_bytes(&frame.samples)),
             };
@@ -238,48 +252,52 @@ impl Daemon {
                 },
                 Err(err) => Response::err(err),
             },
-            Command::Play { path } => {
-                let mut playback = self.playback.lock().unwrap();
-                match playback.load(&path) {
-                    Ok(()) => {
-                        playback.play();
-                        Response::ok()
-                    }
-                    Err(err) => Response::err(err),
-                }
-            }
-            Command::Pause => {
-                self.playback.lock().unwrap().pause();
-                Response::ok()
-            }
-            Command::Resume => {
-                self.playback.lock().unwrap().play();
-                Response::ok()
-            }
-            Command::StopPlayback => match self.playback.lock().unwrap().stop() {
-                Ok(()) => Response::ok(),
-                Err(err) => Response::err(err),
-            },
-            Command::Seek { position_secs } => {
-                match self.playback.lock().unwrap().seek(position_secs) {
-                    Ok(()) => Response::ok(),
-                    Err(err) => Response::err(err),
-                }
-            }
-            Command::SetVolume { volume } => {
-                self.playback.lock().unwrap().set_volume(volume);
-                Response::ok()
-            }
+            Command::Load { path } => self.with_playback(|playback| {
+                playback.load(&path)?;
+                Ok(Response { duration_secs: playback.duration_secs(), ..Response::ok() })
+            }),
+            Command::Play { path } => self.with_playback(|playback| {
+                playback.load(&path)?;
+                playback.play()?;
+                Ok(Response { duration_secs: playback.duration_secs(), ..Response::ok() })
+            }),
+            Command::Pause => self.with_playback(|playback| {
+                playback.pause();
+                Ok(Response::ok())
+            }),
+            Command::Resume => self.with_playback(|playback| {
+                playback.play()?;
+                Ok(Response::ok())
+            }),
+            Command::StopPlayback => self.with_playback(|playback| {
+                playback.stop()?;
+                Ok(Response::ok())
+            }),
+            Command::Seek { position_secs } => self.with_playback(|playback| {
+                playback.seek(position_secs)?;
+                Ok(Response::ok())
+            }),
+            Command::SetVolume { volume } => self.with_playback(|playback| {
+                playback.set_volume(volume.clamp(0.0, 1.0));
+                Ok(Response::ok())
+            }),
             Command::Status => {
                 let playback = self.playback.lock().unwrap();
                 Response {
                     capturing: Some(self.sampler.is_capturing()),
                     streaming: Some(self.sampler.is_streaming()),
                     stream_subscribers: Some(self.sampler.stream_subscriber_count() as u32),
-                    playing: Some(!playback.is_paused() && !playback.is_finished()),
-                    paused: Some(playback.is_paused()),
-                    position_secs: Some(playback.position_secs()),
-                    duration_secs: playback.duration_secs(),
+                    playing: Some(playback.as_ref().is_some_and(|p| {
+                        p.current_path().is_some() && !p.is_paused() && !p.is_finished()
+                    })),
+                    paused: Some(playback.as_ref().is_some_and(Playback::is_paused)),
+                    position_secs: Some(playback.as_ref().map(Playback::position_secs).unwrap_or(0.0)),
+                    duration_secs: playback.as_ref().and_then(Playback::duration_secs),
+                    finished: Some(playback.as_ref().is_some_and(Playback::is_finished)),
+                    path: playback.as_ref()
+                        .and_then(Playback::current_path)
+                        .map(|p| p.to_string_lossy().into_owned()),
+                    output_device: playback.as_ref().map(|p| p.device_name().to_string()),
                     ..Response::ok()
                 }
             }
@@ -288,6 +306,14 @@ impl Daemon {
             Command::StartStream { .. } => {
                 Response::err("start_stream must be the only command sent on a connection")
             }
+        }
+    }
+
+    /// runs a playback command, or reports that no audio output was opened
+    fn with_playback(&self, f: impl FnOnce(&mut Playback) -> Result<Response, String>) -> Response {
+        match self.playback.lock().unwrap().as_mut() {
+            Some(playback) => f(playback).unwrap_or_else(Response::err),
+            None => Response::err("audio output is unavailable"),
         }
     }
 }
@@ -310,4 +336,3 @@ fn pcm16_to_bytes(samples: &[i16]) -> Vec<u8> {
     }
     bytes
 }
-
