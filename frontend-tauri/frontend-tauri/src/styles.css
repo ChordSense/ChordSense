@@ -164,38 +164,28 @@ body {
 }
 
 .feedback-status {
-    min-height: 1.4em;
-    margin: 0.25em 0 0;
-    color: #39453b;
-    font-size: 0.95rem;
-    text-align: center;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
-
-.feedback-rating {
-    width: fit-content;
-    margin: 0 auto 0.7rem;
-    padding: 0.3rem 0.9rem;
-    border-radius: 999px;
-    color: #fff;
-    font-size: 0.9rem;
-    font-weight: 800;
-    letter-spacing: 0.04em;
-}
-
-.feedback-rating[data-rating="green"] { background: #176b39; }
-.feedback-rating[data-rating="yellow"] { background: #946000; }
-.feedback-rating[data-rating="red"] { background: #9b3030; }
 
 .feedback-screen-overlay {
     position: fixed;
     inset: 0;
     z-index: 900;
     pointer-events: none;
-    background: rgba(28, 170, 73, 0.10);
     opacity: 0;
     transition: opacity 180ms ease;
 }
 
+.feedback-screen-overlay[data-rating="green"] { background: rgba(28, 170, 73, 0.10); }
+.feedback-screen-overlay[data-rating="red"] { background: rgba(198, 45, 45, 0.10); }
 .feedback-screen-overlay.visible { opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {

@@ -115,7 +115,7 @@ export class FeedbackRater {
                 this.candidate = null;
                 this.candidateSince = null;
             }
-            if (this.lastRatingSupportAt !== null &&
+            if (this.rating !== "green" && this.lastRatingSupportAt !== null &&
                 playbackTimeSeconds * 1000 - this.lastRatingSupportAt > this.options.dropoutHoldMs) {
                 this.rating = null;
                 this.lastRatingChangeAt = null;
@@ -146,6 +146,9 @@ export class FeedbackRater {
         }
         this.lastSequence = event.sequence;
         const visible = this.advance(event.playbackTimeSeconds);
+        // A confirmed match belongs to the chart segment, not to each later
+        // inference window. Only a segment change or explicit reset clears it.
+        if (this.rating === "green") return visible;
         const sampleTime = alignSampleTime(
             event.playbackTimeSeconds,
             event.sampleAgeMs,

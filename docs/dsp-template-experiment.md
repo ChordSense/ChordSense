@@ -26,8 +26,8 @@ The selected template event identifies itself with `model: chordsense-chroma-tem
 - DC-centered AC RMS below 0.008 is silence. A 150 ms signal hold avoids brief quiet gaps after a strum. Clipping is still vetoed.
 - Template concentration must be at least 0.40 and the winning root must beat the next root by at least 0.02. Otherwise the label is `N` and the UI abstains.
 - If the root is supported but the major/minor score difference is below 0.08, an otherwise matching chord is yellow. A matching seventh chord is also yellow because this scorer only resolves triads.
-- The experimental UI requires a chord rating to persist for 500 ms before showing it. Contradictory evidence cannot extend the previous green rating. The normal CNN still uses its previous entry dwell.
-- The template route waits a full second of silence before resetting its 15-frame context. Ratings disappear during sustained silence; a new chord needs another causal context after reset.
+- The experimental UI requires a chord rating to persist for 500 ms before showing it. Once green is confirmed, the overlay stays green until the chart advances to the next chord, even if later inference is contradictory or the guitar falls silent. The normal CNN keeps its previous entry dwell and uses the same green latch.
+- The template route waits a full second of silence before resetting its 15-frame context. Before green has been confirmed, sustained silence clears the rating; a new chord needs another causal context after reset. Only green and red have visible overlays; yellow remains an internal uncertain rating.
 
 ## Reproduce the saved guitar replay
 
@@ -47,7 +47,7 @@ models/chord-cnn-lstm-model/venv/bin/python -m models.chordsense_cnn.benchmark_t
 
 The `--segment` labels refer to the *played* chord and deliberately avoid change boundaries; their timings are approximate. With the current code, the first take has E 129/129, A 108/108, D 108/108, and G 101/108 exact named windows; the seven remaining G windows say Gm. The second has E 129/129, A 107/107, D 123/123, and G 123/123 exact named windows. The G evidence is mostly quality-uncertain: zero first-take G windows and ten second-take G windows are green-eligible. The selected quiet intervals produce no named predictions.
 
-On 147 held-out recordings, an exploratory feature replay found 25,913/30,474 audible chord windows passed the signal/root/concentration gate, with 94.1% exact labels among accepted windows. It also accepted 151/8,904 labeled noise windows. These windows are highly correlated and most chords came from one guitar; the recording, rather than the window, is the independent unit. A held-out F recording was called A#m in 181/235 audible windows, which a longer UI dwell cannot correct. The saved guitar takes had playback paused, so they do not test playback bleed or the complete UI loop.
+On 147 held-out recordings, an exploratory feature replay found 25,913/30,474 audible chord windows passed the signal/root/concentration gate, with 94.1% exact labels among accepted windows. It also accepted 151/8,904 labeled noise windows. These windows are highly correlated and most chords came from one guitar; the recording, rather than the window, is the independent unit. A held-out F recording was called A#m in 181/235 audible windows, which a longer UI dwell cannot correct. Because confirmed green now persists to the end of a chart segment, a false green would persist too; deliberate wrong-chord trials are essential. The saved guitar takes had playback paused, so they do not test playback bleed or the complete UI loop.
 
 ## Live test before promoting it
 

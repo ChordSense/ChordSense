@@ -212,7 +212,6 @@ const status =
 
 const feedbackToggle = document.querySelector("#live-feedback-toggle");
 const feedbackStatus = document.querySelector("#feedback-status");
-const feedbackRating = document.querySelector("#feedback-rating");
 const feedbackOverlay = document.querySelector("#feedback-screen-overlay");
 
 const feedback = {
@@ -236,26 +235,25 @@ function setFeedbackStatus(message) {
 function renderFeedbackRating(rating) {
     if (feedback.displayedRating === rating) return;
     feedback.displayedRating = rating;
-    feedbackOverlay.classList.toggle("visible", rating === "green");
-    feedbackRating.classList.toggle("hidden", !rating);
-    if (rating) {
-        feedbackRating.dataset.rating = rating;
-        feedbackRating.textContent = {
-            green: "Chord match",
-            yellow: "Same root · check quality",
-            red: "Different chord",
-        }[rating];
-        setFeedbackStatus(feedbackRating.textContent);
+    if (rating === "green" || rating === "red") {
+        feedbackOverlay.dataset.rating = rating;
+        feedbackOverlay.classList.add("visible");
+        setFeedbackStatus(rating === "green" ? "Chord match." : "Different chord.");
     } else {
-        delete feedbackRating.dataset.rating;
-        feedbackRating.textContent = "";
+        feedbackOverlay.classList.remove("visible");
+        if (rating === "yellow") setFeedbackStatus("Waiting for a clear chord match.");
     }
 }
 
-function clearFeedbackEvaluation() {
+function clearFeedbackEvaluation({ preserveGreen = false } = {}) {
     feedback.cutoffUnixMs = Date.now();
+    if (preserveGreen && feedback.rater?.advance(player.currentTime).rating === "green") {
+        renderFeedbackRating("green");
+        return true;
+    }
     feedback.rater?.reset(feedback.sessionId);
     renderFeedbackRating(null);
+    return false;
 }
 
 function queueFeedback(action) {
@@ -322,17 +320,20 @@ const feedbackListenerReady = window.__TAURI__.event.listen(
                 return;
             }
             if (messages[payload.status]) {
-                if (payload.status !== "paused") clearFeedbackEvaluation();
-                setFeedbackStatus(messages[payload.status]);
+                const preserved = payload.status !== "paused" &&
+                    clearFeedbackEvaluation({ preserveGreen: true });
+                if (!preserved) setFeedbackStatus(messages[payload.status]);
             }
             return;
         }
         if (payload.type !== "prediction" || feedback.phase !== "running" || player.paused) return;
         if (payload.input_quality !== "ok") {
-            clearFeedbackEvaluation();
-            setFeedbackStatus(payload.input_quality === "clipping"
-                ? "Guitar input is clipping; check the input signal and level."
-                : "Waiting for a clear guitar signal…");
+            const preserved = clearFeedbackEvaluation({ preserveGreen: true });
+            if (!preserved) {
+                setFeedbackStatus(payload.input_quality === "clipping"
+                    ? "Guitar input is clipping; check the input signal and level."
+                    : "Waiting for a clear guitar signal…");
+            }
             return;
         }
         const sampleAge = payload.sample_age_ms;
