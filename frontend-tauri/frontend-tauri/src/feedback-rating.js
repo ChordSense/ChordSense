@@ -61,6 +61,50 @@ export function expectedSegmentAt(segments, seconds) {
     return null;
 }
 
+export class FeedbackScore {
+    constructor(segments) {
+        this.segments = segments;
+        this.reset();
+    }
+
+    reset() {
+        this.segmentRatings = new Map();
+    }
+
+    record(result) {
+        const index = result?.segmentIndex;
+        if (!Number.isInteger(index) || index < 0 || index >= this.segments.length ||
+            !normalizeChord(this.segments[index]?.chord)) return;
+
+        const previous = this.segmentRatings.get(index);
+        if (previous === "green") return;
+
+        if (result.rating === "green" || result.rating === "red" ||
+            result.rating === "yellow") {
+            this.segmentRatings.set(index, result.rating);
+        } else if (!this.segmentRatings.has(index)) {
+            this.segmentRatings.set(index, null);
+        }
+    }
+
+    summary() {
+        const total = this.segmentRatings.size;
+        if (!total) return null;
+
+        let points = 0;
+        for (const rating of this.segmentRatings.values()) {
+            if (rating === "green") points += 1;
+            else if (rating !== "red") points += 0.5;
+        }
+
+        return {
+            points,
+            total,
+            percent: Math.round(points / total * 100)
+        };
+    }
+}
+
 export class FeedbackRater {
     constructor(segments, options = {}) {
         this.segments = segments;

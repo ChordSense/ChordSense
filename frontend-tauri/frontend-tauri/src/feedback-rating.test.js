@@ -3,10 +3,48 @@ import test from "node:test";
 
 import {
     FeedbackRater,
+    FeedbackScore,
     alignSampleTime,
     classifyChordRating,
     normalizeChord
 } from "./feedback-rating.js";
+
+test("scores each visited chord segment once with half credit for inconclusive", () => {
+    const score = new FeedbackScore([
+        { start: 0, end: 1, chord: "C" },
+        { start: 1, end: 2, chord: "D" },
+        { start: 2, end: 3, chord: "Em" },
+        { start: 3, end: 4, chord: "N" }
+    ]);
+
+    score.record({ segmentIndex: 0, rating: null });
+    score.record({ segmentIndex: 0, rating: "green" });
+    score.record({ segmentIndex: 0, rating: "red" });
+    score.record({ segmentIndex: 1, rating: "red" });
+    score.record({ segmentIndex: 2, rating: "yellow" });
+    score.record({ segmentIndex: 3, rating: "green" });
+
+    assert.deepEqual(score.summary(), {
+        points: 1.5,
+        total: 3,
+        percent: 50
+    });
+});
+
+test("does not score chord segments that were never visited", () => {
+    const score = new FeedbackScore([
+        { start: 0, end: 1, chord: "C" },
+        { start: 1, end: 2, chord: "G" }
+    ]);
+
+    assert.equal(score.summary(), null);
+    score.record({ segmentIndex: 1, rating: null });
+    assert.deepEqual(score.summary(), {
+        points: 0.5,
+        total: 1,
+        percent: 50
+    });
+});
 
 test("normalizes chart and model labels without guessing unsupported chords", () => {
     assert.deepEqual(normalizeChord("Bb:maj/3"), {

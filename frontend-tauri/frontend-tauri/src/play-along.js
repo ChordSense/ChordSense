@@ -2,7 +2,7 @@ import {
     chordForCapo,
     recommendCapo
 } from "./capo.js";
-import { FeedbackRater } from "./feedback-rating.js";
+import { FeedbackRater, FeedbackScore } from "./feedback-rating.js";
 
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
@@ -150,7 +150,10 @@ async function syncPlaybackStatus() {
     );
 
     if (result.finished) {
-        if (feedback.phase !== "idle") stopFeedback();
+        if (feedback.phase !== "idle") {
+            finishFeedbackScore();
+            stopFeedback();
+        }
     } else if (wasPaused !== player.paused) {
         if (player.paused) pauseFeedback();
         else if (feedback.enabled) void ensureFeedbackReady();
@@ -213,6 +216,8 @@ const status =
 const feedbackToggle = document.querySelector("#live-feedback-toggle");
 const feedbackStatus = document.querySelector("#feedback-status");
 const feedbackOverlay = document.querySelector("#feedback-screen-overlay");
+const feedbackScorePanel = document.querySelector("#feedback-score");
+const feedbackScoreValue = document.querySelector("#feedback-score-value");
 
 const feedback = {
     enabled: false,
@@ -221,6 +226,7 @@ const feedback = {
     sessionId: null,
     generation: null,
     rater: null,
+    score: null,
     epoch: 0,
     cutoffUnixMs: 0,
     queue: Promise.resolve(),
@@ -243,6 +249,30 @@ function renderFeedbackRating(rating) {
         feedbackOverlay.classList.remove("visible");
         if (rating === "yellow") setFeedbackStatus("Waiting for a clear chord match.");
     }
+}
+
+function hideFeedbackScore() {
+    feedbackScorePanel.classList.add("hidden");
+    feedbackScoreValue.textContent = "—";
+}
+
+function resetFeedbackScore() {
+    feedback.score = null;
+    hideFeedbackScore();
+}
+
+function recordFeedbackResult(result) {
+    feedback.score?.record(result);
+}
+
+function finishFeedbackScore() {
+    recordFeedbackResult(feedback.rater?.advance(player.currentTime));
+    const summary = feedback.score?.summary();
+    renderFeedbackRating(null);
+    if (!summary) return;
+
+    feedbackScoreValue.textContent = `${summary.percent}%`;
+    feedbackScorePanel.classList.remove("hidden");
 }
 
 function clearFeedbackEvaluation({ preserveGreen = false } = {}) {
@@ -270,6 +300,7 @@ function stopFeedback() {
     feedback.sessionId = null;
     feedback.generation = null;
     feedback.rater = null;
+    feedback.score = null;
     clearFeedbackEvaluation();
     let pending = feedback.queue;
     if (wasActive) {
@@ -353,6 +384,7 @@ const feedbackListenerReady = window.__TAURI__.event.listen(
             model: payload.model,
             qualityUncertain: payload.quality_uncertain === true,
         });
+        recordFeedbackResult(result);
         renderFeedbackRating(result?.rating ?? null);
         if (!result?.rating && feedbackStatus.textContent !== "Listening for your guitar…") {
             setFeedbackStatus("Listening for your guitar…");
@@ -388,6 +420,10 @@ async function ensureFeedbackReady() {
             feedback.generation = response.generation;
             feedback.rater = new FeedbackRater(state.chords);
             feedback.rater.reset(feedback.sessionId);
+            if (!resuming) {
+                feedback.score = new FeedbackScore(state.chords);
+                hideFeedbackScore();
+            }
             feedback.phase = "running";
             feedback.cutoffUnixMs = Date.now();
             setFeedbackStatus("Listening for your guitar…");
@@ -415,7 +451,9 @@ async function ensureFeedbackReady() {
 
 function advanceFeedback() {
     if (feedback.phase !== "running" || player.paused) return;
-    const rating = feedback.rater?.advance(player.currentTime).rating ?? null;
+    const result = feedback.rater?.advance(player.currentTime);
+    recordFeedbackResult(result);
+    const rating = result?.rating ?? null;
     if (rating !== feedback.displayedRating) {
         renderFeedbackRating(rating);
         if (!rating) setFeedbackStatus("Listening for your guitar…");
@@ -894,6 +932,7 @@ function closeAudioLibrary() {
 }
 
 async function clearAudioSource() {
+    resetFeedbackScore();
     const feedbackStopped = stopFeedback();
     const playbackStopped = player.loaded
         ? playbackCommand("stop")
@@ -1478,6 +1517,7 @@ async function analyzeAudio() {
     if (state.analyzing) {
         return;
     }
+    resetFeedbackScore();
     stopFeedback();
 
     state.analyzing = true;
@@ -1615,6 +1655,7 @@ async function togglePlayback() {
 }
 
 export function stopPlayback() {
+    resetFeedbackScore();
     const feedbackStopped = stopFeedback();
     const playbackStopped = player.loaded
         ? playbackCommand("stop").catch(console.error)
@@ -1660,6 +1701,7 @@ function seekAudio() {
         Number(seekSlider.value);
 
     player.setPosition(position);
+    hideFeedbackScore();
     clearFeedbackEvaluation();
     if (feedback.enabled && feedback.phase === "running") {
         setFeedbackStatus("Listening for your guitar…");
