@@ -36,12 +36,28 @@ async fn post_control(action: &str) -> Result<Value, String> {
     Ok(payload)
 }
 
+fn is_existing_feedback_session(error: &str) -> bool {
+    error.starts_with("feedback is already ")
+}
+
 #[tauri::command]
 pub async fn start_live_feedback(
     app: AppHandle,
     bridge: State<'_, FeedbackBridge>,
 ) -> Result<Value, String> {
-    let payload = post_control("start").await?;
+    let payload = match post_control("start").await {
+        Ok(payload) => payload,
+        Err(error) if is_existing_feedback_session(&error) => {
+            // The backend outlives the desktop UI, so a killed or restarted UI
+            // can leave a session behind without an owner. This app is the sole
+            // feedback client on the device; release that orphan and retry.
+            post_control("stop").await.map_err(|stop_error| {
+                format!("Could not recover the previous feedback session: {stop_error}")
+            })?;
+            post_control("start").await?
+        }
+        Err(error) => return Err(error),
+    };
     let session_id = payload["session_id"]
         .as_str()
         .ok_or("Feedback start response has no session ID")?
@@ -55,6 +71,20 @@ pub async fn start_live_feedback(
         previous.abort();
     }
     Ok(payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_existing_feedback_session;
+
+    #[test]
+    fn identifies_an_existing_backend_feedback_session() {
+        assert!(is_existing_feedback_session("feedback is already paused"));
+        assert!(is_existing_feedback_session("feedback is already running"));
+        assert!(!is_existing_feedback_session(
+            "audio capture is already in use by recording"
+        ));
+    }
 }
 
 #[tauri::command]
