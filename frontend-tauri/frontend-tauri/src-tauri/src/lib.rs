@@ -707,14 +707,14 @@ async fn end_recording()
 
 /// Playback runs in iod (I2S DAC -> the pedal's headphone jack); the backend
 /// proxies it under /playback/*. `action` is one of load, play, pause, stop,
-/// seek, volume; `body` is that route's JSON (e.g. {"position_secs": 12.5}).
+/// seek, volume, speed; `body` is that route's JSON (e.g. {"position_secs": 12.5}).
 /// Returns the backend's JSON response.
 #[tauri::command]
 async fn playback_command(
     action: String,
     body: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    const ACTIONS: [&str; 6] = ["load", "play", "pause", "stop", "seek", "volume"];
+    const ACTIONS: [&str; 7] = ["load", "play", "pause", "stop", "seek", "volume", "speed"];
     if !ACTIONS.contains(&action.as_str()) {
         return Err(format!("Unknown playback action: {action}"));
     }

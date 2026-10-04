@@ -1,5 +1,6 @@
 import atexit
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -12,6 +13,7 @@ from flask import Flask, Response, jsonify, request
 from werkzeug.utils import secure_filename
 
 from iod_client import IodClient, IodError
+from playback_speed import PlaybackSpeedController, PlaybackSpeedError
 from web_upload import ALLOWED_AUDIO_EXTENSIONS, UPLOADS_DIR, web_upload
 
 from analysis_cache import (
@@ -44,6 +46,7 @@ app.register_blueprint(web_upload)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
 iod = IodClient()
+playback = PlaybackSpeedController(iod, RUNTIME_DIR / "playback-speed-cache")
 live_feedback_session = None
 live_feedback_session_lock = threading.Lock()
 
@@ -551,7 +554,7 @@ def live_feedback_events():
 def _iod_call(action):
     try:
         return jsonify({"success": True, **(action() or {})})
-    except IodError as e:
+    except (IodError, PlaybackSpeedError) as e:
         print(f"Playback command failed: {e}", flush=True)
         return jsonify({"success": False, "error": str(e)}), 502
 
@@ -577,22 +580,22 @@ def playback_load():
         path = _resolve_playback_path(request.get_json(silent=True) or {})
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
-    return _iod_call(lambda: {"path": str(path), "duration": iod.load(path)})
+    return _iod_call(lambda: playback.load(path))
 
 
 @app.post("/playback/play")
 def playback_play():
-    return _iod_call(iod.resume)
+    return _iod_call(playback.resume)
 
 
 @app.post("/playback/pause")
 def playback_pause():
-    return _iod_call(iod.pause)
+    return _iod_call(playback.pause)
 
 
 @app.post("/playback/stop")
 def playback_stop():
-    return _iod_call(iod.stop_playback)
+    return _iod_call(playback.stop)
 
 
 @app.post("/playback/seek")
@@ -602,7 +605,18 @@ def playback_seek():
         position = float(body["position_secs"])
     except (KeyError, TypeError, ValueError):
         return jsonify({"success": False, "error": "position_secs is required"}), 400
-    return _iod_call(lambda: iod.seek(position))
+    if not math.isfinite(position):
+        return jsonify({"success": False, "error": "position_secs must be finite"}), 400
+    return _iod_call(lambda: playback.seek(position))
+
+
+@app.post("/playback/speed")
+def playback_speed():
+    body = request.get_json(silent=True) or {}
+    try:
+        return _iod_call(lambda: playback.set_speed(body.get("speed")))
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
 
 
 @app.post("/playback/volume")
@@ -617,18 +631,7 @@ def playback_volume():
 
 @app.get("/playback/status")
 def playback_status():
-    def status():
-        s = iod.status()
-        return {
-            "playing": s.get("playing", False),
-            "paused": s.get("paused", False),
-            "finished": s.get("finished", False),
-            "position": s.get("position_secs", 0.0),
-            "duration": s.get("duration_secs"),
-            "path": s.get("path"),
-            "output_device": s.get("output_device"),
-        }
-    return _iod_call(status)
+    return _iod_call(playback.status)
 
 
 if __name__ == "__main__":

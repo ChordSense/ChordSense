@@ -207,6 +207,16 @@
 
             </div>
 
+            <label class="speed-control" for="playback-speed">
+                <span>Speed</span>
+                <input id="playback-speed" type="range" min="0.5" max="1" step="0.05" value="1" disabled />
+                <strong id="playback-speed-value">1.00×</strong>
+            </label>
+
+            <button id="focus-toggle" class="focus-toggle" type="button" disabled>
+                Focus View
+            </button>
+
         </section>
 
         <div class="divider"></div>
@@ -225,93 +235,44 @@
             id="chord-display"
             class="chord-display hidden"
         >
-            <!-- These never move -->
-            <div class="chord-role-row">
-                <span class="chord-role">
-                    Previous
-                </span>
+            <div class="chord-playfield">
+                <article class="chord-active" aria-label="Current chord">
+                    <span id="chord-progress" class="visually-hidden" role="progressbar"
+                        aria-label="Time until the next chord" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></span>
+                    <div id="chord-halo" class="chord-halo">
+                        <div class="chord-halo-inner">
+                            <span class="chord-role current-role">Current</span>
+                            <div class="chord-diagram-slot">
+                                <img id="current-image" class="chord-image" alt="" />
+                                <span id="current-fallback" class="chord-fallback hidden"></span>
+                            </div>
+                            <span id="current-label" class="chord-label"></span>
+                        </div>
+                    </div>
+                    <span class="chord-halo-gate" aria-hidden="true"></span>
+                </article>
 
-                <span class="chord-role current-role">
-                    Current
-                </span>
-
-                <span class="chord-role">
-                    Next
-                </span>
-            </div>
-
-            <!-- Only this portion moves -->
-            <div class="carousel-viewport">
-
-                <div
-                    id="chord-track"
-                    class="chord-track"
-                >
-                    <article class="carousel-card previous-card">
-                        <img
-                            id="previous-image"
-                            class="chord-image"
-                            alt=""
-                        />
-
-                        <span
-                            id="previous-label"
-                            class="chord-label"
-                        ></span>
+                <div class="chord-upcoming" aria-label="Upcoming chords">
+                    <article class="chord-preview next-card">
+                        <span class="chord-role">Next</span>
+                        <div class="chord-diagram-slot">
+                            <img id="next-image" class="chord-image" alt="" />
+                            <span id="next-fallback" class="chord-fallback hidden"></span>
+                        </div>
+                        <span id="next-label" class="chord-label"></span>
                     </article>
 
-                    <article class="carousel-card current-card">
-                        <img
-                            id="current-image"
-                            class="chord-image"
-                            alt=""
-                        />
-
-                        <span
-                            id="current-label"
-                            class="chord-label"
-                        ></span>
-                    </article>
-
-                    <article class="carousel-card next-card">
-                        <img
-                            id="next-image"
-                            class="chord-image"
-                            alt=""
-                        />
-
-                        <span
-                            id="next-label"
-                            class="chord-label"
-                        ></span>
-                    </article>
-
-                    <!-- waits just off screen -->
-                    <article class="carousel-card incoming-card">
-                        <img
-                            id="incoming-image"
-                            class="chord-image"
-                            alt=""
-                        />
-
-                        <span
-                            id="incoming-label"
-                            class="chord-label"
-                        ></span>
+                    <article class="chord-preview then-card">
+                        <span class="chord-role">Then</span>
+                        <div class="chord-diagram-slot">
+                            <img id="then-image" class="chord-image" alt="" />
+                            <span id="then-fallback" class="chord-fallback hidden"></span>
+                        </div>
+                        <span id="then-label" class="chord-label"></span>
                     </article>
                 </div>
-
             </div>
 
-            <div
-                id="feedback-score"
-                class="feedback-score hidden"
-                role="status"
-                aria-live="polite"
-            >
-                <span>Live Score</span>
-                <strong id="feedback-score-value">—</strong>
-            </div>
         </section>
     </section>
 
@@ -359,6 +320,48 @@
 
     <!-- live rating overlay -->
     <div id="feedback-screen-overlay" class="feedback-screen-overlay" aria-hidden="true"></div>
+
+    <!-- End-of-song result takes over the play field after live feedback. -->
+    <section
+        id="feedback-score"
+        class="feedback-score hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="feedback-score-title"
+        aria-describedby="feedback-score-detail"
+        tabindex="-1"
+    >
+        <div class="feedback-score-frame">
+            <header class="feedback-score-header">
+                <span class="feedback-score-brand">ChordSense</span>
+                <span class="feedback-score-section">Play Along · Results</span>
+            </header>
+
+            <div class="feedback-score-content">
+                <p class="feedback-score-kicker">Song complete</p>
+                <h2 id="feedback-score-title">Your live score</h2>
+
+                <div class="feedback-score-number">
+                    <strong id="feedback-score-value" aria-live="polite">—</strong>
+                    <span>Chord match score</span>
+                </div>
+
+                <p id="feedback-score-song" class="feedback-score-song"></p>
+                <p id="feedback-score-detail" class="feedback-score-detail"></p>
+
+                <div class="feedback-score-actions">
+                    <button id="feedback-score-replay" class="feedback-score-button primary" type="button">
+                        Play again
+                    </button>
+                    <button id="feedback-score-close" class="feedback-score-button secondary" type="button">
+                        Back to song
+                    </button>
+                </div>
+            </div>
+
+            <p class="feedback-score-footer">Every chord is another chance to find the groove.</p>
+        </div>
+    </section>
 
     <!-- CHORDSENSE LIBRARY -->
     <div
