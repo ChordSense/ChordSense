@@ -24,8 +24,8 @@ html,
 body {
     margin: 0;
     width: 100%;
-    height: 100%;
-    overflow: hidden;
+    min-height: 100%;
+    overflow-x: hidden;
 }
 
 body {
@@ -33,9 +33,8 @@ body {
 }
 
 .app {
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden;
+    width: 100%;
+    min-height: 100vh;
 
     padding:
         clamp(16px, 2vh, 32px)
@@ -46,6 +45,8 @@ body {
 /* HEADER */
 
 #mode-title {
+    font-family: "Rakkas", serif;
+    font-weight: 400;
     transition:
         opacity 180ms ease,
         transform 180ms ease;
@@ -176,16 +177,34 @@ body {
 }
 
 .feedback-screen-overlay {
+    --feedback-fill: transparent;
+    --feedback-edge: transparent;
+    --feedback-glow: transparent;
+
     position: fixed;
     inset: 0;
     z-index: 900;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 180ms ease;
+    background: var(--feedback-fill);
+    box-shadow:
+        inset 0 0 0 clamp(10px, 1.1vw, 18px) var(--feedback-edge),
+        inset 0 0 clamp(150px, 20vw, 360px) var(--feedback-glow);
+    transition: opacity 90ms ease;
 }
 
-.feedback-screen-overlay[data-rating="green"] { background: rgba(28, 170, 73, 0.10); }
-.feedback-screen-overlay[data-rating="red"] { background: rgba(198, 45, 45, 0.10); }
+.feedback-screen-overlay[data-rating="green"] {
+    --feedback-fill: rgba(21, 184, 74, 0.16);
+    --feedback-edge: rgba(31, 222, 93, 0.88);
+    --feedback-glow: rgba(21, 184, 74, 0.32);
+}
+
+.feedback-screen-overlay[data-rating="red"] {
+    --feedback-fill: rgba(211, 39, 39, 0.18);
+    --feedback-edge: rgba(244, 55, 55, 0.88);
+    --feedback-glow: rgba(211, 39, 39, 0.34);
+}
+
 .feedback-screen-overlay.visible { opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -302,6 +321,7 @@ body {
 
     align-items: center;
     gap: 12px;
+    min-width: 0;
 
     margin-top: 14px;
 }
@@ -312,6 +332,9 @@ body {
 }
 
 .song-pill {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
     padding:
         clamp(7px, 1vh, 12px)
         clamp(12px, 1.5vw, 22px);
@@ -322,6 +345,8 @@ body {
     color: #fff;
 
     font-size: clamp(15px, 1.4vw, 22px);
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* PLAYER */
@@ -391,6 +416,76 @@ body {
   font-size: clamp(14px, 1.3vw, 20px);
 }
 
+.speed-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 7px 12px;
+    border: 2px solid #111;
+    border-radius: 999px;
+    background: #f5ebda;
+    font-size: clamp(14px, 1.1vw, 18px);
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.speed-control input {
+    width: clamp(100px, 9vw, 150px);
+    accent-color: #111;
+    cursor: pointer;
+}
+
+.speed-control input:disabled {
+    opacity: .35;
+    cursor: default;
+}
+
+.speed-control input:focus-visible {
+    outline: 3px solid #111;
+    outline-offset: 4px;
+}
+
+.speed-control strong {
+    min-width: 4.3em;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.focus-toggle {
+    flex: 0 0 auto;
+    min-height: 48px;
+    padding: 8px 18px;
+    border: 2px solid #111;
+    border-radius: 999px;
+    background: #111;
+    color: #f0e6d2;
+    font: inherit;
+    font-size: clamp(14px, 1.1vw, 18px);
+    font-weight: 800;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.focus-toggle:disabled {
+    opacity: .35;
+    cursor: default;
+}
+
+.focus-toggle:focus-visible {
+    outline: 3px solid #111;
+    outline-offset: 4px;
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
 /* EMPTY STATE */
 
 .empty-state {
@@ -414,259 +509,520 @@ body {
    ======================================== */
 
 .chord-display {
-    width: min(94vw, 1500px);
+    width: min(100%, 2200px);
 
-    margin:
-        clamp(10px, 2vh, 24px)
-        auto 0;
+    margin: clamp(8px, 1.2vh, 18px) auto 0;
 }
 
+.feedback-score {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
 
-/* Stationary labels */
-
-.chord-role-row {
     display: grid;
+    place-items: center;
+    overflow-y: auto;
 
-    grid-template-columns:
-        repeat(3, 1fr);
-
-    align-items: center;
-
-    width: 100%;
-
-    margin-bottom:
-        clamp(10px, 1.5vh, 20px);
+    padding: clamp(12px, 3vh, 40px) clamp(12px, 4vw, 56px);
+    background: #f0e6d2;
+    color: #111;
 }
 
-.chord-role {
-    justify-self: center;
+.feedback-score-frame {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
 
-    position: relative;
-    z-index: 10;
+    width: min(100%, 1000px);
+    min-height: min(850px, 88vh);
+    padding: clamp(18px, 2.4vw, 42px);
 
-    padding:
-        clamp(7px, 0.8vh, 11px)
-        clamp(16px, 1.5vw, 26px);
+    border: 3px solid #111;
+    border-radius: clamp(20px, 2.5vw, 36px);
+    background: #f5ebda;
+    box-shadow: 0 18px 35px rgba(0, 0, 0, 0.13);
+}
 
-    border:
-        2px solid
-        rgba(0, 0, 0, 0.75);
+.feedback-score-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
 
-    border-radius: 999px;
+.feedback-score-brand {
+    padding: 6px 18px 3px;
+    border-radius: 22px;
+    background: #111;
+    color: #f5ebda;
+    font-family: "Rakkas", serif;
+    font-size: clamp(24px, 2.3vw, 36px);
+    line-height: 1.1;
+}
 
-    background:
-        rgba(255, 255, 255, 0.35);
-
-    color: #111;
-
-    font-size:
-        clamp(14px, 1.2vw, 20px);
-
+.feedback-score-section {
+    font-size: clamp(11px, 1.1vw, 16px);
     font-weight: 800;
-
     letter-spacing: 0.14em;
-
+    text-align: right;
     text-transform: uppercase;
+}
 
-    box-shadow:
-        0 5px 14px
-        rgba(0, 0, 0, 0.08);
+.feedback-score-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    padding: 18px 0;
+    text-align: center;
+}
+
+.feedback-score-kicker {
+    margin: 0 0 12px;
+    padding: 7px 15px;
+    border: 2px solid #111;
+    border-radius: 999px;
+    font-size: clamp(12px, 1vw, 15px);
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+}
+
+.feedback-score-content h2 {
+    margin: 0;
+    font-family: "Rakkas", serif;
+    font-size: clamp(38px, 4.4vw, 70px);
+    font-weight: 400;
+    line-height: 1.05;
+}
+
+.feedback-score-number {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: min(100%, 620px);
+    margin: clamp(12px, 2vh, 25px) 0;
+    padding: clamp(10px, 1.6vh, 20px) 0;
+    border-top: 2px solid #111;
+    border-bottom: 2px solid #111;
+}
+
+.feedback-score-number strong {
+    font-family: "Rakkas", serif;
+    font-size: clamp(96px, 14vw, 216px);
+    font-weight: 400;
+    line-height: 0.94;
+    white-space: nowrap;
+}
+
+.feedback-score-number span {
+    margin-top: 4px;
+    font-size: clamp(12px, 1.2vw, 18px);
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.feedback-score-song {
+    max-width: min(100%, 780px);
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: clamp(18px, 2vw, 28px);
+    font-weight: 800;
+}
+
+.feedback-score-detail {
+    margin: 4px 0 clamp(18px, 3vh, 38px);
+    color: rgba(17, 17, 17, 0.72);
+    font-size: clamp(14px, 1.3vw, 19px);
+}
+
+.feedback-score-actions {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    width: 100%;
+}
+
+.feedback-score-button {
+    min-width: min(220px, 100%);
+    min-height: 52px;
+    padding: 12px 25px;
+    border: 2px solid #111;
+    border-radius: 999px;
+    font-size: clamp(16px, 1.3vw, 20px);
+    font-weight: 800;
+    cursor: pointer;
+    transition: transform 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.feedback-score-button.primary {
+    background: #111;
+    color: #f5ebda;
+}
+
+.feedback-score-button.secondary {
+    background: transparent;
+    color: #111;
+}
+
+.feedback-score-button:hover {
+    transform: translateY(-2px);
+}
+
+.feedback-score-button.secondary:hover {
+    background: rgba(17, 17, 17, 0.07);
+}
+
+.feedback-score-button:focus-visible {
+    outline: 3px solid #111;
+    outline-offset: 4px;
+}
+
+.feedback-score-footer {
+    margin: 0;
+    font-size: clamp(12px, 1.05vw, 16px);
+    font-weight: 650;
+    text-align: center;
+}
+
+@media (max-width: 580px) {
+    .feedback-score-frame {
+        min-height: calc(100vh - 24px);
+    }
+
+    .feedback-score-section {
+        max-width: 118px;
+        line-height: 1.4;
+    }
+
+    .feedback-score-number strong {
+        font-size: clamp(84px, 25vw, 140px);
+    }
+
+    .feedback-score-actions {
+        flex-direction: column;
+    }
+
+    .feedback-score-button {
+        width: 100%;
+    }
+}
+
+@media (max-height: 720px) and (min-width: 581px) {
+    .feedback-score-frame {
+        min-height: 0;
+        padding: 18px 28px;
+    }
+
+    .feedback-score-content {
+        padding: 8px 0;
+    }
+
+    .feedback-score-number {
+        margin: 8px 0;
+        padding: 5px 0;
+    }
+
+    .feedback-score-number strong {
+        font-size: min(18vh, 150px);
+    }
+
+    .feedback-score-detail {
+        margin-bottom: 12px;
+    }
+
+    .feedback-score-footer {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .feedback-score-button {
+        transition: none;
+    }
+
+    .feedback-score-button:hover {
+        transform: none;
+    }
+}
+
+
+/* Keep all three shapes in one field, with the current shape dominant. */
+.chord-role {
+    display: inline-block;
+    padding: clamp(6px, .7vh, 10px) clamp(13px, 1.2vw, 22px);
+    border: 2px solid #111;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .36);
+    color: #111;
+    font-size: clamp(13px, 1.1vw, 18px);
+    font-weight: 800;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    box-shadow: 0 5px 14px rgba(0, 0, 0, .08);
 }
 
 .chord-role.current-role {
-    background: #000;
-
+    background: #111;
     color: #f0e6d2;
-
-    border-color: #000;
-
-    transform:
-        scale(1.08);
-
-    box-shadow:
-        0 8px 20px
-        rgba(0, 0, 0, 0.18);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, .16);
 }
 
-
-/* ========================================
-   CAROUSEL
-   ======================================== */
-
-.carousel-viewport {
+.chord-playfield {
+    --halo-size: clamp(340px, min(27vw, 44vh), 500px);
+    position: relative;
     width: 100%;
-
-    overflow: hidden;
-
-    min-height:
-        clamp(260px, 43vh, 520px);
+    height: clamp(490px, 58vh, 710px);
+    margin: 0 auto;
 }
 
-
-.chord-track {
-    display: grid;
-
-    grid-template-columns:
-        repeat(4, 1fr);
-
-    width: calc(100% * 4 / 3);
-
-    transform:
-        translate3d(0, 0, 0);
-
-    transition:
-        transform
-        520ms
-        cubic-bezier(0.22, 1, 0.36, 1);
-
-    will-change: transform;
+.chord-active {
+    position: absolute;
+    z-index: 2;
+    top: 50%;
+    left: 18%;
+    width: var(--halo-size);
+    height: var(--halo-size);
+    transform: translateY(-50%);
 }
 
-
-.chord-track.rolling {
-    transform:
-        translate3d(-25%, 0, 0);
+.chord-halo {
+    width: 100%;
+    height: 100%;
+    padding: clamp(9px, .9vw, 13px);
+    border-radius: 50%;
+    background: conic-gradient(
+        from 90deg,
+        #111 0 var(--halo-angle, 0deg),
+        #cdbfa8 var(--halo-angle, 0deg) 360deg
+    );
+    box-shadow: 0 10px 24px rgba(0, 0, 0, .09);
 }
 
-.chord-track.no-transition,
-.chord-track.no-transition .carousel-card {
-    transition: none !important;
-}
-
-
-/* ========================================
-   CARDS
-   ======================================== */
-
-.carousel-card {
+.chord-halo-inner {
     display: flex;
-
     flex-direction: column;
-
     align-items: center;
     justify-content: center;
-
-    min-width: 0;
-
-    transform:
-        scale(0.82);
-
-    opacity: 0.45;
-
-    transition:
-        transform
-        520ms
-        cubic-bezier(0.22, 1, 0.36, 1),
-
-        opacity
-        520ms
-        cubic-bezier(0.22, 1, 0.36, 1),
-
-        filter
-        520ms
-        cubic-bezier(0.22, 1, 0.36, 1);
-
-    will-change:
-        transform,
-        opacity;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    padding: clamp(10px, 1vw, 18px);
+    border-radius: 50%;
+    background: #f0e6d2;
 }
 
-
-/* center card */
-
-.carousel-card.current-card {
-    transform:
-        scale(1);
-
-    opacity: 1;
-
-    filter:
-        drop-shadow(
-            0 20px 22px
-            rgba(0, 0, 0, 0.12)
-        );
+.chord-halo-gate {
+    position: absolute;
+    z-index: 3;
+    top: 50%;
+    right: -10px;
+    width: clamp(17px, 1.6vw, 24px);
+    height: clamp(17px, 1.6vw, 24px);
+    border: 4px solid #f0e6d2;
+    border-radius: 50%;
+    background: #111;
+    transform: translateY(-50%);
 }
 
-
-/*
- * While moving:
- *
- * card 2 becomes Previous
- * card 3 becomes Current
- * card 4 becomes Next
- */
-
-.chord-track.rolling
-.carousel-card:nth-child(2) {
-    transform:
-        scale(0.82);
-
-    opacity: 0.45;
-
-    filter: none;
+.chord-diagram-slot {
+    display: grid;
+    flex: 1 1 auto;
+    place-items: center;
+    width: 100%;
+    min-height: 0;
 }
-
-.chord-track.rolling
-.carousel-card:nth-child(3) {
-    transform:
-        scale(1);
-
-    opacity: 1;
-
-    filter:
-        drop-shadow(
-            0 20px 22px
-            rgba(0, 0, 0, 0.12)
-        );
-}
-
-.chord-track.rolling
-.carousel-card:nth-child(4) {
-    transform:
-        scale(0.82);
-
-    opacity: 0.45;
-}
-
-
-/* first card fades while leaving */
-
-.chord-track.rolling
-.carousel-card:nth-child(1) {
-    opacity: 0;
-}
-
-
-/* ========================================
-   CHORD IMAGES
-   ======================================== */
 
 .chord-image {
-    width:
-        min(24vw, 420px);
-
-    height:
-        min(34vh, 420px);
-
-    object-fit: contain;
-
-    /* The diagram artwork reserves space on the left for fret markers. */
-    transform: translateX(clamp(-24px, -2vh, -12px));
-
     display: block;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    transform: translateX(clamp(-20px, -1.5vw, -8px));
 }
 
+.chord-active .chord-image {
+    height: calc(var(--halo-size) - 100px);
+}
+
+.chord-upcoming {
+    position: absolute;
+    z-index: 1;
+    top: 50%;
+    left: 50%;
+    display: flex;
+    align-items: center;
+    gap: clamp(20px, 3vw, 80px);
+    transform: translateY(-50%);
+}
+
+.chord-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: clamp(220px, 22vw, 420px);
+    min-height: clamp(280px, 39vh, 460px);
+    text-align: center;
+}
+
+.chord-preview .chord-image {
+    height: min(26vw, 34vh, 360px, calc(var(--halo-size) - 125px));
+}
+
+.chord-preview.then-card {
+    width: clamp(170px, 17vw, 300px);
+    opacity: .52;
+}
+
+.chord-preview.then-card .chord-image {
+    height: min(19vw, 26vh, 280px);
+}
 
 .chord-label {
-    margin-top: 8px;
-
-    font-family:
-        "Rakkas",
-        serif;
-
-    font-size:
-        clamp(22px, 2vw, 36px);
+    min-height: 1.1em;
+    margin-top: 2px;
+    font-family: "Rakkas", serif;
+    font-size: clamp(21px, 2vw, 34px);
+    text-align: center;
 }
+
+.chord-preview .chord-label {
+    font-size: clamp(18px, 1.7vw, 28px);
+}
+
+.chord-preview.then-card .chord-label {
+    font-size: clamp(16px, 1.4vw, 24px);
+}
+
+.chord-fallback {
+    max-width: 100%;
+    font-family: "Rakkas", serif;
+    font-size: clamp(26px, 3vw, 48px);
+    text-align: center;
+}
+
+.chord-preview .chord-fallback {
+    font-size: clamp(19px, 2vw, 30px);
+}
+
+.chord-preview.then-card .chord-fallback {
+    font-size: clamp(16px, 1.5vw, 24px);
+}
+
+@media (max-width: 1100px) {
+    .chord-playfield {
+        height: clamp(440px, 56vh, 620px);
+    }
+
+    .chord-active {
+        left: 4%;
+    }
+
+    .chord-upcoming {
+        left: 40%;
+    }
+}
+
+@media (max-height: 850px) and (min-width: 761px) {
+    .chord-playfield {
+        --halo-size: clamp(280px, min(28vw, 44vh), 410px);
+        height: clamp(380px, 50vh, 520px);
+    }
+
+    .chord-preview {
+        min-height: 0;
+    }
+
+    .chord-preview .chord-image {
+        height: min(25vw, 32vh, 320px, calc(var(--halo-size) - 145px));
+    }
+
+    .chord-preview.then-card .chord-image {
+        height: min(18vw, 24vh, 220px);
+    }
+}
+
+@media (min-width: 761px) and (max-width: 900px) {
+    .chord-upcoming {
+        left: 49%;
+    }
+
+    .chord-preview {
+        width: clamp(190px, 23vw, 215px);
+    }
+
+    .chord-preview.then-card {
+        width: clamp(140px, 16vw, 160px);
+    }
+}
+
+@media (max-width: 760px) {
+    .chord-playfield {
+        --halo-size: min(51vw, 46vh, 320px);
+        height: max(400px, 63vh);
+    }
+
+    .chord-active {
+        left: 1%;
+    }
+
+    .chord-upcoming {
+        left: 48%;
+        flex-direction: column;
+        gap: 0;
+    }
+
+    .chord-preview {
+        width: min(48vw, 260px);
+        min-height: 0;
+    }
+
+    .chord-preview .chord-image {
+        height: min(25vw, 23vh, 180px);
+    }
+
+    .chord-preview.then-card {
+        width: min(43vw, 220px);
+    }
+
+    .chord-preview.then-card .chord-image {
+        height: min(19vw, 17vh, 130px);
+    }
+}
+
+@media (max-width: 520px) {
+    .chord-playfield {
+        --halo-size: min(46vw, 240px);
+        height: 430px;
+    }
+
+    .chord-active .chord-image {
+        height: calc(var(--halo-size) - 79px);
+    }
+
+    .chord-role {
+        font-size: 11px;
+        padding: 5px 9px;
+    }
+
+    .chord-label {
+        font-size: 19px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .chord-halo,
+    .chord-image,
+    .chord-label {
+        animation: none;
+        transition: none;
+    }
+}
+
 
 .mode-view {
     opacity: 1;
@@ -1069,14 +1425,6 @@ body {
         min-height: 300px;
     }
 
-    .chord-image {
-        height: 30vh;
-    }
-
-    .chord-card.side .chord-image {
-        height: 24vh;
-    }
-
     .empty-state {
         min-height: 300px;
     }
@@ -1092,11 +1440,203 @@ body {
         font-size: clamp(24px, 5vw, 38px);
     }
 
-    .chord-display {
-        gap: 12px;
+    .player {
+        flex-wrap: wrap;
     }
 
     .timeline {
-        width: 40vw;
+        flex: 1 1 230px;
+        width: auto;
     }
+
+    .speed-control {
+        flex: 0 1 260px;
+    }
+}
+
+@media (max-width: 760px) {
+    .app-header {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+    }
+
+    .app-header h1 {
+        margin: 0;
+    }
+
+    .mode-switcher {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
+}
+
+@media (max-width: 420px) {
+    .app-header h1 {
+        font-size: 24px;
+    }
+
+    .logo {
+        padding: 5px 10px;
+        font-size: 23px;
+    }
+}
+
+/* Focused practice keeps transport beside the song and gives the chord field
+   the rest of the viewport. The current halo keeps its normal size limit. */
+.app.focused-playing {
+    padding-top: clamp(12px, 1.2vh, 20px);
+    padding-bottom: clamp(12px, 1.2vh, 20px);
+}
+
+.app.focused-playing .app-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.app.focused-playing .app-header h1 {
+    margin: 0;
+    font-size: clamp(24px, 1.7vw, 36px);
+}
+
+.app.focused-playing .logo {
+    padding: 4px 12px;
+    border-radius: 18px;
+    font-size: clamp(22px, 1.7vw, 34px);
+}
+
+.app.focused-playing .mode-switcher,
+.app.focused-playing #play-mode > .toolbar,
+.app.focused-playing #play-mode > .divider {
+    display: none;
+}
+
+.app.focused-playing > .divider {
+    margin: clamp(8px, .8vh, 12px) 0;
+}
+
+.app.focused-playing #play-mode {
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100svh - 100px);
+}
+
+.app.focused-playing .now-playing {
+    order: 0;
+    max-width: 100%;
+    margin: 0;
+}
+
+.app.focused-playing .vinyl-icon {
+    width: clamp(28px, 2vw, 40px);
+    height: clamp(28px, 2vw, 40px);
+}
+
+.app.focused-playing .song-pill {
+    padding: 6px 12px;
+    font-size: clamp(14px, 1vw, 18px);
+}
+
+.app.focused-playing .player {
+    order: 1;
+    min-width: 0;
+    margin: 6px 0 0;
+    gap: clamp(8px, .8vw, 14px);
+}
+
+.app.focused-playing .icon-button {
+    width: clamp(40px, 3vw, 50px);
+    height: clamp(40px, 3vw, 50px);
+}
+
+.app.focused-playing .icon-button img {
+    width: clamp(36px, 2.8vw, 46px);
+    height: clamp(36px, 2.8vw, 46px);
+}
+
+.app.focused-playing .timeline {
+    flex: 1 1 240px;
+    width: auto;
+    max-width: 700px;
+}
+
+.app.focused-playing .speed-control,
+.app.focused-playing .focus-toggle {
+    min-height: 42px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+}
+
+.app.focused-playing .focus-toggle {
+    background: #f5ebda;
+    color: #111;
+}
+
+.app.focused-playing #status {
+    order: 2;
+    min-height: 1.2em;
+    margin: 4px 0 0;
+    font-size: clamp(11px, .9vw, 14px);
+    line-height: 1.2;
+}
+
+.app.focused-playing .chord-display {
+    order: 3;
+    flex: 1 0 auto;
+    margin: 0 auto;
+}
+
+.app.focused-playing .chord-playfield {
+    height: max(540px, calc(100svh - 210px));
+}
+
+@media (min-width: 1600px) {
+    .app.focused-playing #play-mode {
+        display: grid;
+        grid-template-columns: minmax(0, min(30vw, 620px)) minmax(0, 1fr);
+        grid-template-areas:
+            "song transport"
+            "status status"
+            "chords chords";
+        column-gap: clamp(20px, 2vw, 42px);
+        align-items: center;
+    }
+
+    .app.focused-playing .now-playing { grid-area: song; }
+    .app.focused-playing .player {
+        grid-area: transport;
+        margin: 0;
+        flex-wrap: nowrap;
+    }
+    .app.focused-playing #status { grid-area: status; }
+    .app.focused-playing .chord-display { grid-area: chords; }
+}
+
+@media (min-width: 1600px) and (min-height: 900px) {
+    .app.focused-playing {
+        display: flex;
+        flex-direction: column;
+        height: 100svh;
+    }
+
+    .app.focused-playing #play-mode {
+        flex: 1 1 auto;
+        min-height: 0;
+        grid-template-rows: auto auto minmax(0, 1fr);
+    }
+
+    .app.focused-playing .chord-display,
+    .app.focused-playing .chord-playfield {
+        height: 100%;
+        min-height: 0;
+    }
+}
+
+@media (max-height: 850px) {
+    .app.focused-playing .chord-playfield {
+        height: max(430px, calc(100svh - 245px));
+    }
+}
+
+@media (max-width: 520px) {
+    .app.focused-playing .player { flex-wrap: wrap; }
+    .app.focused-playing .timeline { flex-basis: 190px; }
 }

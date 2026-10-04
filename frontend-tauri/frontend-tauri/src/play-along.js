@@ -2,10 +2,17 @@ import {
     chordForCapo,
     recommendCapo
 } from "./capo.js";
-import { FeedbackRater } from "./feedback-rating.js";
+import { FeedbackRater, FeedbackScore } from "./feedback-rating.js";
+import { buildChordTimeline, chordProgressionAt } from "./chord-progression.js";
+import { LocalPlayback } from "./local-playback.js";
 
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
+const localPlayback = /Macintosh|Mac OS X/.test(navigator.userAgent)
+    ? new LocalPlayback(source => source.path
+        ? invoke("load_audio_file", { path: source.path })
+        : invoke("load_uploaded_audio", { filename: source.upload }))
+    : null;
 
 const state = {
     audioPath: null,
@@ -18,22 +25,19 @@ const state = {
     analyzing: false,
 
     chords: [],
+    timeline: [],
 
     capo: 0,
     recommendedCapo: null,
 
     analysisDuration: 0,
 
-    lastActiveChordIndex: null,
-
-    isChordTransitioning: false,
+    displayedChordIndex: null,
 };
 
 /*
- * Audio plays in iod, out of the pedal's headphone jack (I2S DAC), not in
- * this window. `player` mirrors the parts of an <audio> element this file
- * uses (paused / currentTime / duration), so chord sync reads iod's clock:
- * position is polled from the backend and interpolated between polls.
+ * The Pi plays through iod and its I2S DAC. macOS previews in the WebView.
+ * `player` mirrors the active transport clock for chord and feedback sync.
  */
 const STATUS_POLL_MS = 250;
 
@@ -41,6 +45,7 @@ const player = {
     loaded: false,
     paused: true,
     duration: NaN,
+    speed: 1,
 
     // bumped by every command so a status poll that was already in flight
     // can't undo it (e.g. report "paused" just after Play was pressed)
@@ -59,7 +64,7 @@ const player = {
             (performance.now() - this.baseTime) / 1000;
 
         const position =
-            this.basePosition + elapsed;
+            this.basePosition + elapsed * this.speed;
 
         return Number.isFinite(this.duration)
             ? Math.min(position, this.duration)
@@ -75,13 +80,15 @@ const player = {
 function playbackCommand(action, body = null) {
     player.generation += 1;
 
-    return invoke(
-        "playback_command",
-        {
-            action,
-            body
-        }
-    );
+    return localPlayback
+        ? localPlayback.command(action, body ?? {})
+        : invoke(
+            "playback_command",
+            {
+                action,
+                body
+            }
+        );
 }
 
 /*
@@ -99,7 +106,9 @@ async function loadPlayback(source) {
     player.paused = true;
     player.duration =
         result.duration ?? NaN;
+    player.speed = 1;
     player.setPosition(0);
+    renderSpeed(1);
 
     await playbackCommand(
         "volume",
@@ -124,8 +133,9 @@ async function syncPlaybackStatus() {
     let result;
 
     try {
-        result =
-            await invoke("playback_status");
+        result = localPlayback
+            ? localPlayback.status()
+            : await invoke("playback_status");
     } catch (error) {
         console.error(
             "Playback status failed:",
@@ -142,21 +152,35 @@ async function syncPlaybackStatus() {
         player.duration = result.duration;
     }
 
+    if (Number.isFinite(result.speed)) {
+        player.speed = result.speed;
+        if (!speedSlider.matches(":active") && !speedChangePending) {
+            renderSpeed(result.speed);
+        }
+    }
+
     const wasPaused = player.paused;
+    const previousPosition = player.currentTime;
 
     player.paused = !result.playing;
     player.setPosition(
         result.position ?? 0
     );
+    const movedWhilePaused = player.paused &&
+        Math.abs(player.currentTime - previousPosition) > 0.05;
 
-    if (result.finished) {
-        if (feedback.phase !== "idle") stopFeedback();
+    if (result.finished && !speedChangePending) {
+        resetFocusedView();
+        if (feedback.phase !== "idle") {
+            finishFeedbackScore();
+            stopFeedback();
+        }
     } else if (wasPaused !== player.paused) {
         if (player.paused) pauseFeedback();
         else if (feedback.enabled) void ensureFeedbackReady();
     }
 
-    if (wasPaused !== player.paused) {
+    if (wasPaused !== player.paused || movedWhilePaused) {
         updatePlayerUI();
         updateChordDisplay();
     }
@@ -200,6 +224,10 @@ const playPauseImage =
 
 const volumeSlider = document.querySelector("#volume");
 const seekSlider = document.querySelector("#seek");
+const speedSlider = document.querySelector("#playback-speed");
+const speedValue = document.querySelector("#playback-speed-value");
+const focusToggle = document.querySelector("#focus-toggle");
+let speedChangePending = false;
 
 const timeDisplay =
     document.querySelector("#time-display");
@@ -213,6 +241,33 @@ const status =
 const feedbackToggle = document.querySelector("#live-feedback-toggle");
 const feedbackStatus = document.querySelector("#feedback-status");
 const feedbackOverlay = document.querySelector("#feedback-screen-overlay");
+const feedbackScorePanel = document.querySelector("#feedback-score");
+const feedbackScoreValue = document.querySelector("#feedback-score-value");
+const feedbackScoreSong = document.querySelector("#feedback-score-song");
+const feedbackScoreDetail = document.querySelector("#feedback-score-detail");
+const feedbackScoreReplay = document.querySelector("#feedback-score-replay");
+const feedbackScoreClose = document.querySelector("#feedback-score-close");
+let scoreFocusReturn = null;
+
+function displayTrackName(name) {
+    if (typeof name !== "string" || !name.trim()) return "Your song";
+    let display = name;
+    try {
+        display = decodeURIComponent(name);
+    } catch {
+        // A local filename can contain a literal percent sign.
+    }
+    // Older uploaded filenames had percent signs stripped from URL encoded
+    // spaces (for example, "John20Mayer"). Only repair clear repeated cases.
+    if (!display.includes(" ") &&
+        (display.match(/[A-Za-z]20(?=[A-Za-z-])/g) ?? []).length >= 2) {
+        display = display.replaceAll("20", " ");
+    }
+    return display
+        .replace(/\.(mp3|wav|m4a|flac|ogg)$/i, "")
+        .replace(/\s+/g, " ")
+        .trim();
+}
 
 const feedback = {
     enabled: false,
@@ -221,6 +276,7 @@ const feedback = {
     sessionId: null,
     generation: null,
     rater: null,
+    score: null,
     epoch: 0,
     cutoffUnixMs: 0,
     queue: Promise.resolve(),
@@ -245,9 +301,68 @@ function renderFeedbackRating(rating) {
     }
 }
 
+function hideFeedbackScore() {
+    const wasOpen = !feedbackScorePanel.classList.contains("hidden");
+    feedbackScorePanel.classList.add("hidden");
+    feedbackScoreValue.textContent = "—";
+    for (const sibling of feedbackScorePanel.parentElement.children) {
+        if (sibling !== feedbackScorePanel) sibling.inert = false;
+    }
+    if (wasOpen && scoreFocusReturn?.isConnected) scoreFocusReturn.focus();
+    scoreFocusReturn = null;
+}
+
+function resetFeedbackScore() {
+    feedback.score = null;
+    hideFeedbackScore();
+}
+
+function recordFeedbackResult(result) {
+    feedback.score?.record(result);
+}
+
+function finishFeedbackScore() {
+    recordFeedbackResult(feedback.rater?.advance(player.currentTime, player.speed));
+    const summary = feedback.score?.summary();
+    renderFeedbackRating(null);
+    if (!summary) return;
+
+    feedbackScoreValue.textContent = `${summary.percent}%`;
+    feedbackScoreSong.textContent = displayTrackName(state.audioName);
+    feedbackScoreDetail.textContent =
+        `Across ${summary.total} scored chord ${summary.total === 1 ? "shape" : "shapes"}.`;
+    scoreFocusReturn = document.activeElement;
+    feedbackScorePanel.classList.remove("hidden");
+    for (const sibling of feedbackScorePanel.parentElement.children) {
+        if (sibling !== feedbackScorePanel) sibling.inert = true;
+    }
+    feedbackScoreReplay.focus();
+}
+
+feedbackScoreClose.addEventListener("click", hideFeedbackScore);
+feedbackScoreReplay.addEventListener("click", async () => {
+    await stopPlayback();
+    await togglePlayback();
+});
+feedbackScorePanel.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+        hideFeedbackScore();
+    } else if (event.key === "Tab") {
+        const first = feedbackScoreReplay;
+        const last = feedbackScoreClose;
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    }
+});
+
 function clearFeedbackEvaluation({ preserveGreen = false } = {}) {
     feedback.cutoffUnixMs = Date.now();
-    if (preserveGreen && feedback.rater?.advance(player.currentTime).rating === "green") {
+    if (preserveGreen && feedback.rater?.advance(player.currentTime, player.speed).rating === "green") {
         renderFeedbackRating("green");
         return true;
     }
@@ -270,6 +385,7 @@ function stopFeedback() {
     feedback.sessionId = null;
     feedback.generation = null;
     feedback.rater = null;
+    feedback.score = null;
     clearFeedbackEvaluation();
     let pending = feedback.queue;
     if (wasActive) {
@@ -327,15 +443,6 @@ const feedbackListenerReady = window.__TAURI__.event.listen(
             return;
         }
         if (payload.type !== "prediction" || feedback.phase !== "running" || player.paused) return;
-        if (payload.input_quality !== "ok") {
-            const preserved = clearFeedbackEvaluation({ preserveGreen: true });
-            if (!preserved) {
-                setFeedbackStatus(payload.input_quality === "clipping"
-                    ? "Guitar input is clipping; check the input signal and level."
-                    : "Waiting for a clear guitar signal…");
-            }
-            return;
-        }
         const sampleAge = payload.sample_age_ms;
         const emittedAt = payload.emitted_at_unix_ms;
         if (typeof sampleAge !== "number" || typeof emittedAt !== "number") return;
@@ -346,6 +453,7 @@ const feedbackListenerReady = window.__TAURI__.event.listen(
             sessionId: feedback.sessionId,
             sequence: payload.sequence,
             playbackTimeSeconds: player.currentTime,
+            playbackSpeed: player.speed,
             sampleAgeMs: totalAge,
             chord: payload.chord,
             inputQuality: payload.input_quality,
@@ -353,7 +461,16 @@ const feedbackListenerReady = window.__TAURI__.event.listen(
             model: payload.model,
             qualityUncertain: payload.quality_uncertain === true,
         });
+        recordFeedbackResult(result);
         renderFeedbackRating(result?.rating ?? null);
+        if (payload.input_quality !== "ok") {
+            if (!result?.rating) {
+                setFeedbackStatus(payload.input_quality === "clipping"
+                    ? "Guitar input is clipping; check the input signal and level."
+                    : "Waiting for a clear guitar signal…");
+            }
+            return;
+        }
         if (!result?.rating && feedbackStatus.textContent !== "Listening for your guitar…") {
             setFeedbackStatus("Listening for your guitar…");
         }
@@ -388,6 +505,10 @@ async function ensureFeedbackReady() {
             feedback.generation = response.generation;
             feedback.rater = new FeedbackRater(state.chords);
             feedback.rater.reset(feedback.sessionId);
+            if (!resuming) {
+                feedback.score = new FeedbackScore(state.chords);
+                hideFeedbackScore();
+            }
             feedback.phase = "running";
             feedback.cutoffUnixMs = Date.now();
             setFeedbackStatus("Listening for your guitar…");
@@ -415,7 +536,9 @@ async function ensureFeedbackReady() {
 
 function advanceFeedback() {
     if (feedback.phase !== "running" || player.paused) return;
-    const rating = feedback.rater?.advance(player.currentTime).rating ?? null;
+    const result = feedback.rater?.advance(player.currentTime, player.speed);
+    recordFeedbackResult(result);
+    const rating = result?.rating ?? null;
     if (rating !== feedback.displayedRating) {
         renderFeedbackRating(rating);
         if (!rating) setFeedbackStatus("Listening for your guitar…");
@@ -444,8 +567,32 @@ const emptyState =
 const chordDisplay =
     document.querySelector("#chord-display");
 
-const previousImage =
-    document.querySelector("#previous-image");
+const app = document.querySelector(".app");
+let focusDismissed = false;
+
+function setFocusedView(active) {
+    if (app.classList.contains("focused-playing") === active) return;
+    if (active && document.activeElement?.closest(".app-header, .toolbar")) {
+        playPauseButton.focus();
+    }
+    app.classList.toggle("focused-playing", active);
+    focusToggle.textContent = active ? "Show Controls" : "Focus View";
+}
+
+function resetFocusedView() {
+    focusDismissed = false;
+    setFocusedView(false);
+}
+
+function syncFocusedView() {
+    const hasChords = state.timeline.length > 0 &&
+        !chordDisplay.classList.contains("hidden");
+    if (!player.loaded || !hasChords) {
+        resetFocusedView();
+    } else if (!player.paused && !focusDismissed) {
+        setFocusedView(true);
+    }
+}
 
 const currentImage =
     document.querySelector("#current-image");
@@ -453,23 +600,20 @@ const currentImage =
 const nextImage =
     document.querySelector("#next-image");
 
-const previousLabel =
-    document.querySelector("#previous-label");
-
 const currentLabel =
     document.querySelector("#current-label");
 
 const nextLabel =
     document.querySelector("#next-label");
 
-const incomingImage =
-    document.querySelector("#incoming-image");
-
-const incomingLabel =
-    document.querySelector("#incoming-label");
-
-const chordTrack =
-    document.querySelector("#chord-track");
+const thenImage = document.querySelector("#then-image");
+const thenLabel = document.querySelector("#then-label");
+const currentFallback = document.querySelector("#current-fallback");
+const nextFallback = document.querySelector("#next-fallback");
+const thenFallback = document.querySelector("#then-fallback");
+const chordHalo = document.querySelector("#chord-halo");
+const chordProgress = document.querySelector("#chord-progress");
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 // Map these to physical buttons (TODO)
 const capoDownButton =
@@ -510,13 +654,7 @@ function updateCapoControls() {
 
 
 function refreshChordDisplayForCapo() {
-    /*
-     * Force the current carousel cards to
-     * re-render even though playback has not
-     * moved to another chord.
-     */
-    state.lastActiveChordIndex = null;
-
+    state.displayedChordIndex = null;
     updateChordDisplay();
 }
 
@@ -894,6 +1032,8 @@ function closeAudioLibrary() {
 }
 
 async function clearAudioSource() {
+    resetFeedbackScore();
+    resetFocusedView();
     const feedbackStopped = stopFeedback();
     const playbackStopped = player.loaded
         ? playbackCommand("stop")
@@ -902,9 +1042,12 @@ async function clearAudioSource() {
     player.loaded = false;
     player.paused = true;
     player.duration = NaN;
+    player.speed = 1;
     player.setPosition(0);
+    renderSpeed(1);
 
     await Promise.all([feedbackStopped, playbackStopped]);
+    localPlayback?.release();
 }
 
 async function applyLoadedAudio({
@@ -927,18 +1070,18 @@ async function applyLoadedAudio({
 
 
     state.chords = [];
+    state.timeline = [];
 
     resetCapoForNewAudio();
 
     state.analysisDuration =
         0;
 
-    state.lastActiveChordIndex =
-        null;
+    state.displayedChordIndex = null;
 
 
     songName.textContent =
-        name;
+        displayTrackName(name);
 
 
     status.textContent =
@@ -1014,12 +1157,16 @@ function simplifyChord(raw) {
             type = "7";
         }
         else if (
-            quality.startsWith("min")
+            quality === "min" ||
+            quality === "minor" ||
+            quality === "m"
         ) {
             type = "minor";
         }
-        else {
+        else if (quality === "maj" || quality === "major" || quality === "") {
             type = "major";
+        } else {
+            return null;
         }
     }
 
@@ -1036,7 +1183,7 @@ function simplifyChord(raw) {
      * Bbm7
      */
     else {
-        const match = base.match(/^([A-G](?:#|b)?)(m)?(7)?$/);
+        const match = base.match(/^([A-G](?:#|b)?)(maj7|m7|m|7)?$/);
 
         if (!match) {
             console.warn("Unrecognized chord format:", raw);
@@ -1046,24 +1193,12 @@ function simplifyChord(raw) {
 
         root = match[1];
 
-        const isMinor =
-            Boolean(match[2]);
-
-        const isSeventh =
-            Boolean(match[3]);
-
-        if (isMinor && isSeventh) {
-            type = "minor7";
-        }
-        else if (isMinor) {
-            type = "minor";
-        }
-        else if (isSeventh) {
-            type = "7";
-        }
-        else {
-            type = "major";
-        }
+        type = ({
+            maj7: "major7",
+            m7: "minor7",
+            m: "minor",
+            7: "7"
+        })[match[2]] ?? "major";
     }
 
     return {
@@ -1152,213 +1287,60 @@ function chordImagePath(rawChord) {
     return `assets/chords/${fileName}`;
 }
 
-function activeChordIndex(time) {
-    return state.chords.findIndex(
-        chord =>
-            time >= chord.start &&
-            time < chord.end
-    );
-}
+function displayChord(chord, imageElement, labelElement, fallbackElement) {
+    // Keep the analysis in concert pitch. Only the displayed shape changes
+    // with the capo, including both upcoming diagrams.
+    const isRest = chord?.rest || chord?.chord === "N";
+    const displayedChord = chord && !isRest
+        ? chordForCapo(chord.chord, state.capo)
+        : null;
+    const path = displayedChord ? chordImagePath(displayedChord) : null;
 
-function getChordSet(time) {
-    const index =
-        activeChordIndex(time);
-
-    if (index === -1) {
-        const nextIndex =
-            state.chords.findIndex(
-                chord => time < chord.start
-            );
-
-        if (nextIndex === -1) {
-            return {
-                index: -1,
-                previous:
-                    state.chords.at(-1) ?? null,
-                current: null,
-                next: null,
-                incoming: null
-            };
-        }
-
-        return {
-            index: -1,
-            previous:
-                nextIndex > 0
-                    ? state.chords[nextIndex - 1]
-                    : null,
-            current: null,
-            next:
-                state.chords[nextIndex] ?? null,
-            incoming:
-                state.chords[nextIndex + 1] ?? null
-        };
-    }
-
-    return {
-        index,
-
-        previous:
-            index > 0
-                ? state.chords[index - 1]
-                : null,
-
-        current:
-            state.chords[index],
-
-        next:
-            index < state.chords.length - 1
-                ? state.chords[index + 1]
-                : null,
-
-        incoming:
-            index < state.chords.length - 2
-                ? state.chords[index + 2]
-                : null
-    };
-}
-
-function displayChord(
-    chord,
-    imageElement,
-    labelElement
-) {
-    if (!chord) {
-        imageElement.style.visibility = "hidden";
-        imageElement.removeAttribute("src");
-        labelElement.textContent = "";
-        return;
-    }
-
-    /*
-     * IMPORTANT:
-     *
-     * state.chords remains untouched.
-     *
-     * We only transpose the chord immediately
-     * before it is displayed.
-     */
-    const displayedChord = chordForCapo(chord.chord, state.capo);
-
-    const path = chordImagePath(displayedChord);
-
-    labelElement.textContent = displayedChord;
+    labelElement.textContent = displayedChord ?? "";
+    imageElement.classList.toggle("hidden", !path);
+    fallbackElement.classList.toggle("hidden", Boolean(path));
+    fallbackElement.textContent = isRest
+        ? "Rest"
+        : chord
+            ? "Diagram unavailable"
+            : "—";
 
     if (!path) {
-        imageElement.style.visibility = "hidden";
-
         imageElement.removeAttribute("src");
-
         return;
     }
 
+    imageElement.onerror = () => {
+        imageElement.classList.add("hidden");
+        fallbackElement.classList.remove("hidden");
+        fallbackElement.textContent = "Diagram unavailable";
+    };
     imageElement.src = path;
-
-    imageElement.style.visibility = "visible";
 }
 
 function updateChordDisplay() {
-    if (!state.chords.length) {
-        return;
+    if (!state.timeline.length) return;
+
+    const progression = chordProgressionAt(state.timeline, player.currentTime);
+    if (state.displayedChordIndex !== progression.index) {
+        displayChord(progression.current, currentImage, currentLabel, currentFallback);
+        displayChord(progression.next, nextImage, nextLabel, nextFallback);
+        displayChord(progression.then, thenImage, thenLabel, thenFallback);
+        state.displayedChordIndex = progression.index;
     }
 
-    const time = player.currentTime || 0;
-
-    const {
-        index,
-        previous,
-        current,
-        next,
-        incoming
-    } = getChordSet(time);
-
-    /*
-     * Initial render or manual seek:
-     * immediately show correct chords.
-     */
-    if (state.lastActiveChordIndex === null) {
-        renderChordSet(previous, current, next, incoming);
-        state.lastActiveChordIndex = index;
-        return;
-    }
-
-    if (index === state.lastActiveChordIndex) {
-        return;
-    }
-
-    /*
-     * Usually one step during normal playback.
-     */
-    if (index === state.lastActiveChordIndex + 1) {
-        rollToChord(previous, current, next, incoming, index);
-        return;
-    }
-
-    /*
-     * Large jump / unusual timing:
-     * don't animate through several chords.
-     */
-    renderChordSet(previous, current, next, incoming);
-    state.lastActiveChordIndex = index;
-}
-
-function rollToChord(previous, current, next, incoming, newIndex) {
-    if (state.isChordTransitioning) {
-        return;
-    }
-    state.isChordTransitioning = true;
-    /*
-     * IMPORTANT:
-     *
-     * Do NOT change the fourth card here.
-     *
-     * It already contains the chord that needs
-     * to roll into the Next position.
-     */
-    chordTrack.classList.add("rolling");
-
-    const finishTransition = () => {
-        /*
-        * 1. Freeze ALL transitions:
-        *    track + individual chord cards.
-        */
-        chordTrack.classList.add("no-transition");
-
-        chordTrack.classList.remove("rolling");
-
-        renderChordSet(previous, current, next, incoming);
-
-        void chordTrack.offsetHeight;
-
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                chordTrack.classList.remove("no-transition");
-                state.lastActiveChordIndex = newIndex;
-                state.isChordTransitioning = false;
-            });
-        });
-    };
-
-    const onTrackTransitionEnd = (event) => {
-        if (event.target !== chordTrack || event.propertyName !== "transform") {
-            return;
-        }
-
-        chordTrack.removeEventListener("transitionend", onTrackTransitionEnd);
-        finishTransition();
-    };
-
-    chordTrack.addEventListener("transitionend", onTrackTransitionEnd);
-}
-
-function renderChordSet(previous, current, next, incoming) {
-    displayChord(previous, previousImage, previousLabel);
-
-    displayChord(current, currentImage, currentLabel);
-
-    displayChord(next, nextImage, nextLabel);
-
-    displayChord(incoming, incomingImage, incomingLabel);
+    // The sweep uses the same original-song clock as seeking and feedback.
+    const visibleProgress = reducedMotion.matches
+        ? Math.floor(progression.progress * 10) / 10
+        : progression.progress;
+    chordHalo.style.setProperty("--halo-angle", `${visibleProgress * 360}deg`);
+    chordProgress.setAttribute("aria-valuenow", String(Math.round(progression.progress * 100)));
+    chordProgress.setAttribute(
+        "aria-valuetext",
+        progression.current
+            ? `${progression.remaining.toFixed(1)} seconds until ${progression.next ? "next chord" : "song end"}`
+            : "No active chord"
+    );
 }
 
 function updateControls() {
@@ -1369,6 +1351,9 @@ function updateControls() {
     playPauseButton.disabled = !hasAudio;
     stopButton.disabled = !hasAudio;
     seekSlider.disabled = !hasAudio;
+    speedSlider.disabled = !hasAudio || speedChangePending;
+    focusToggle.disabled = !hasAudio || !state.timeline.length ||
+        chordDisplay.classList.contains("hidden");
 }
 
 async function browseLocalAudio() {
@@ -1478,6 +1463,7 @@ async function analyzeAudio() {
     if (state.analyzing) {
         return;
     }
+    resetFeedbackScore();
     stopFeedback();
 
     state.analyzing = true;
@@ -1530,8 +1516,8 @@ async function analyzeAudio() {
         updateCapoRecommendation();
 
         state.analysisDuration = result.duration ?? 0;
-
-        state.lastActiveChordIndex = null;
+        state.timeline = buildChordTimeline(state.chords, getDuration());
+        state.displayedChordIndex = null;
 
         if (result.cached) {
 
@@ -1568,7 +1554,7 @@ async function analyzeAudio() {
 
     } finally {
         state.analyzing = false;
-        updateControls();
+        updatePlayerUI();
     }
 }
 
@@ -1615,6 +1601,8 @@ async function togglePlayback() {
 }
 
 export function stopPlayback() {
+    resetFeedbackScore();
+    resetFocusedView();
     const feedbackStopped = stopFeedback();
     const playbackStopped = player.loaded
         ? playbackCommand("stop").catch(console.error)
@@ -1642,13 +1630,71 @@ function setVolume() {
     ).catch(console.error);
 }
 
+function renderSpeed(speed) {
+    speedSlider.value = String(speed);
+    speedValue.textContent = `${speed.toFixed(2)}×`;
+    speedSlider.setAttribute("aria-valuetext", `${speed.toFixed(2)} times normal speed`);
+}
+
+async function setPlaybackSpeed() {
+    if (!player.loaded || speedChangePending) return;
+    const requested = Number(speedSlider.value);
+    if (requested === player.speed) {
+        renderSpeed(player.speed);
+        return;
+    }
+
+    speedChangePending = true;
+    status.textContent = `Setting playback speed to ${requested.toFixed(2)}×…`;
+    updateControls();
+    try {
+        // iod renders a pitch-preserving variant on the Pi; the local player
+        // uses the WebView's pitch-preserving playback rate on macOS.
+        const speedRequest = playbackCommand("speed", { speed: requested });
+        const speedGeneration = player.generation;
+        const result = await speedRequest;
+        const transportChanged = player.generation !== speedGeneration;
+        player.generation += 1; // discard status polls from before the swap
+        player.speed = result.speed;
+        if (!transportChanged) {
+            player.paused = !result.playing;
+            player.setPosition(result.position);
+        }
+        if (Number.isFinite(result.duration)) player.duration = result.duration;
+        clearFeedbackEvaluation();
+        if (
+            !transportChanged &&
+            feedback.phase !== "idle" &&
+            (result.finished ||
+                (Number.isFinite(player.duration) &&
+                    result.position >= player.duration - 0.02))
+        ) {
+            resetFocusedView();
+            finishFeedbackScore();
+            stopFeedback();
+        }
+        if (feedback.enabled && feedback.phase === "running") {
+            setFeedbackStatus("Listening for your guitar…");
+        }
+        renderSpeed(player.speed);
+        status.textContent = `Playback speed: ${player.speed.toFixed(2)}×.`;
+        updatePlayerUI();
+        updateChordDisplay();
+    } catch (error) {
+        console.error("Speed change failed:", error);
+        status.textContent = `Speed change failed: ${error}`;
+        renderSpeed(player.speed);
+    } finally {
+        speedChangePending = false;
+        updateControls();
+    }
+}
+
 // while dragging: move the display only
 function previewSeek() {
     player.setPosition(
         Number(seekSlider.value)
     );
-
-    state.lastActiveChordIndex = null;
 
     updatePlayerUI();
     updateChordDisplay();
@@ -1660,6 +1706,7 @@ function seekAudio() {
         Number(seekSlider.value);
 
     player.setPosition(position);
+    hideFeedbackScore();
     clearFeedbackEvaluation();
     if (feedback.enabled && feedback.phase === "running") {
         setFeedbackStatus("Listening for your guitar…");
@@ -1675,8 +1722,6 @@ function seekAudio() {
         status.textContent =
             `Seek failed: ${error}`;
     });
-
-    state.lastActiveChordIndex = null;
 
     updatePlayerUI();
     updateChordDisplay();
@@ -1721,6 +1766,7 @@ function updatePlayerUI() {
     );
 
     updateControls();
+    syncFocusedView();
 }
 
 function formatTime(seconds) {
@@ -1747,10 +1793,16 @@ function formatTime(seconds) {
     );
 }
 
-function playbackLoop() {
+let lastVisualFrame = 0;
+function playbackLoop(frameTime) {
     if (!player.paused) {
-        updatePlayerUI();
-        updateChordDisplay();
+        // A 30 Hz display sweep is smooth at the Pi's mirrored resolution
+        // while leaving its main thread time for transport and input.
+        if (frameTime - lastVisualFrame >= 30) {
+            updatePlayerUI();
+            updateChordDisplay();
+            lastVisualFrame = frameTime;
+        }
         advanceFeedback();
     }
 
@@ -1783,10 +1835,32 @@ stopButton.addEventListener(
     stopPlayback
 );
 
+focusToggle.addEventListener("click", () => {
+    if (focusToggle.disabled) return;
+    const focused = app.classList.contains("focused-playing");
+    focusDismissed = focused;
+    setFocusedView(!focused);
+});
+
+document.addEventListener("keydown", event => {
+    if (event.key !== "Escape" || !app.classList.contains("focused-playing") ||
+        !feedbackScorePanel.classList.contains("hidden") || libraryState.open) return;
+    focusDismissed = true;
+    setFocusedView(false);
+    focusToggle.focus();
+});
+
 volumeSlider.addEventListener(
     "input",
     setVolume
 );
+
+speedSlider.addEventListener("input", () => {
+    const speed = Number(speedSlider.value).toFixed(2);
+    speedValue.textContent = `${speed}×`;
+    speedSlider.setAttribute("aria-valuetext", `${speed} times normal speed`);
+});
+speedSlider.addEventListener("change", setPlaybackSpeed);
 
 seekSlider.addEventListener(
     "input",
@@ -1824,9 +1898,8 @@ export async function loadRecordedAnalysis(result) {
 
     state.analysisDuration =
         result.duration ?? 0;
-
-    state.lastActiveChordIndex =
-        null;
+    state.timeline = buildChordTimeline(state.chords, getDuration());
+    state.displayedChordIndex = null;
 
 
     songName.textContent =

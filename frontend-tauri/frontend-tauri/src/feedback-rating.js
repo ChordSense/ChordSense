@@ -41,10 +41,12 @@ export function classifyChordRating(expectedLabel, playedLabel) {
     return "yellow";
 }
 
-export function alignSampleTime(playbackTimeSeconds, sampleAgeMs, maxAgeMs = 750) {
+export function alignSampleTime(playbackTimeSeconds, sampleAgeMs, maxAgeMs = 750,
+    playbackSpeed = 1) {
     if (!Number.isFinite(playbackTimeSeconds) || !Number.isFinite(sampleAgeMs) ||
-        sampleAgeMs < 0 || sampleAgeMs > maxAgeMs) return null;
-    return Math.max(0, playbackTimeSeconds - sampleAgeMs / 1000);
+        sampleAgeMs < 0 || sampleAgeMs > maxAgeMs ||
+        !Number.isFinite(playbackSpeed) || playbackSpeed <= 0) return null;
+    return Math.max(0, playbackTimeSeconds - sampleAgeMs * playbackSpeed / 1000);
 }
 
 export function expectedSegmentAt(segments, seconds) {
@@ -61,6 +63,50 @@ export function expectedSegmentAt(segments, seconds) {
     return null;
 }
 
+export class FeedbackScore {
+    constructor(segments) {
+        this.segments = segments;
+        this.reset();
+    }
+
+    reset() {
+        this.segmentRatings = new Map();
+    }
+
+    record(result) {
+        const index = result?.segmentIndex;
+        if (!Number.isInteger(index) || index < 0 || index >= this.segments.length ||
+            !normalizeChord(this.segments[index]?.chord)) return;
+
+        const previous = this.segmentRatings.get(index);
+        if (previous === "green") return;
+
+        if (result.rating === "green" || result.rating === "red" ||
+            result.rating === "yellow") {
+            this.segmentRatings.set(index, result.rating);
+        } else if (!this.segmentRatings.has(index)) {
+            this.segmentRatings.set(index, null);
+        }
+    }
+
+    summary() {
+        const total = this.segmentRatings.size;
+        if (!total) return null;
+
+        let points = 0;
+        for (const rating of this.segmentRatings.values()) {
+            if (rating === "green") points += 1;
+            else if (rating !== "red") points += 0.5;
+        }
+
+        return {
+            points,
+            total,
+            percent: Math.round(points / total * 100)
+        };
+    }
+}
+
 export class FeedbackRater {
     constructor(segments, options = {}) {
         this.segments = segments;
@@ -68,9 +114,13 @@ export class FeedbackRater {
             confidence: 0.60,
             redConfidence: 0.70,
             chordGraceMs: 250,
+            templateChordGraceMs: 120,
             positiveDwellMs: 200,
             redDwellMs: 350,
-            experimentalDwellMs: 500,
+            // Template predictions arrive every ~23 ms. Twelve consistent
+            // predictions are enough to confirm a match without adding half
+            // a second to the recognizer's ~418 ms causal audio window.
+            experimentalDwellMs: 280,
             minDisplayMs: 300,
             dropoutHoldMs: 240,
             maxAgeMs: 750,
@@ -82,22 +132,39 @@ export class FeedbackRater {
     reset(sessionId = null) {
         this.sessionId = sessionId;
         this.lastSequence = -1;
+        this.playbackSpeed = 1;
+        this.lastPlaybackTimeSeconds = null;
+        this.elapsedWallMs = 0;
         this.segmentIndex = null;
         this.rating = null;
         this.candidate = null;
         this.candidateSince = null;
+        this.candidatePausedAt = null;
         this.lastRatingChangeAt = null;
         this.lastReliableAt = null;
         this.lastRatingSupportAt = null;
     }
 
-    advance(playbackTimeSeconds) {
+    advance(playbackTimeSeconds, playbackSpeed = this.playbackSpeed) {
+        const speed = Number.isFinite(playbackSpeed) && playbackSpeed > 0
+            ? playbackSpeed : 1;
+        if (Number.isFinite(playbackTimeSeconds)) {
+            if (this.lastPlaybackTimeSeconds !== null) {
+                // Dwell and dropout windows are real milliseconds. Integrating
+                // chart-time progress also handles speed changes mid-song.
+                this.elapsedWallMs += Math.max(0,
+                    playbackTimeSeconds - this.lastPlaybackTimeSeconds) * 1000 / speed;
+            }
+            this.lastPlaybackTimeSeconds = playbackTimeSeconds;
+        }
+        this.playbackSpeed = speed;
         const current = expectedSegmentAt(this.segments, playbackTimeSeconds);
         if (!current || !normalizeChord(current.segment.chord)) {
             this.segmentIndex = null;
             this.rating = null;
             this.candidate = null;
             this.candidateSince = null;
+            this.candidatePausedAt = null;
             this.lastRatingSupportAt = null;
             return this._result(playbackTimeSeconds);
         }
@@ -106,17 +173,19 @@ export class FeedbackRater {
             this.rating = null;
             this.candidate = null;
             this.candidateSince = null;
+            this.candidatePausedAt = null;
             this.lastRatingChangeAt = null;
             this.lastReliableAt = null;
             this.lastRatingSupportAt = null;
         } else {
             if (this.lastReliableAt !== null &&
-                playbackTimeSeconds * 1000 - this.lastReliableAt > this.options.dropoutHoldMs) {
+                this.elapsedWallMs - this.lastReliableAt > this.options.dropoutHoldMs) {
                 this.candidate = null;
                 this.candidateSince = null;
+                this.candidatePausedAt = null;
             }
             if (this.rating !== "green" && this.lastRatingSupportAt !== null &&
-                playbackTimeSeconds * 1000 - this.lastRatingSupportAt > this.options.dropoutHoldMs) {
+                this.elapsedWallMs - this.lastRatingSupportAt > this.options.dropoutHoldMs) {
                 this.rating = null;
                 this.lastRatingChangeAt = null;
                 this.lastRatingSupportAt = null;
@@ -143,16 +212,19 @@ export class FeedbackRater {
         if (this.lastSequence >= 0 && event.sequence > this.lastSequence + 1) {
             this.candidate = null;
             this.candidateSince = null;
+            this.candidatePausedAt = null;
         }
         this.lastSequence = event.sequence;
-        const visible = this.advance(event.playbackTimeSeconds);
+        const speed = event.playbackSpeed ?? 1;
+        const visible = this.advance(event.playbackTimeSeconds, speed);
         // A confirmed match belongs to the chart segment, not to each later
         // inference window. Only a segment change or explicit reset clears it.
         if (this.rating === "green") return visible;
         const sampleTime = alignSampleTime(
             event.playbackTimeSeconds,
             event.sampleAgeMs,
-            this.options.maxAgeMs
+            this.options.maxAgeMs,
+            speed
         );
         if (sampleTime === null) return visible;
         const current = expectedSegmentAt(this.segments, sampleTime);
@@ -161,6 +233,8 @@ export class FeedbackRater {
             this.segmentIndex = null;
             this.rating = null;
             this.candidate = null;
+            this.candidateSince = null;
+            this.candidatePausedAt = null;
             this.lastRatingSupportAt = null;
             return this._result(sampleTime);
         }
@@ -169,15 +243,19 @@ export class FeedbackRater {
             this.rating = null;
             this.candidate = null;
             this.candidateSince = null;
+            this.candidatePausedAt = null;
             this.lastRatingChangeAt = null;
             this.lastReliableAt = null;
             this.lastRatingSupportAt = null;
         }
-        const sampleMs = sampleTime * 1000;
-        if (sampleMs - current.segment.start * 1000 < this.options.chordGraceMs) {
+        const sampleWallMs = this.elapsedWallMs - event.sampleAgeMs;
+        const isExperimentalTemplate = event.model === EXPERIMENTAL_TEMPLATE_MODEL;
+        const graceMs = isExperimentalTemplate
+            ? this.options.templateChordGraceMs : this.options.chordGraceMs;
+        if ((sampleTime - current.segment.start) * 1000 <
+            graceMs * speed) {
             return this._result(sampleTime);
         }
-        const isExperimentalTemplate = event.model === EXPERIMENTAL_TEMPLATE_MODEL;
         const chordRating = classifyChordRating(current.segment.chord, event.chord);
         const proposedRating = isExperimentalTemplate &&
             event.qualityUncertain === true && chordRating === "green"
@@ -190,40 +268,63 @@ export class FeedbackRater {
             event.confidence >= neededConfidence;
         const proposed = reliable ? proposedRating : null;
         if (!proposed) {
-            this.candidate = null;
-            this.candidateSince = null;
+            if (event.inputQuality !== "ok" && this.candidate !== null &&
+                this.lastReliableAt !== null &&
+                this.elapsedWallMs - this.lastReliableAt <= this.options.dropoutHoldMs) {
+                // Preserve brief noisy/silent holes without counting them as
+                // evidence toward the dwell threshold.
+                this.candidatePausedAt ??= this.lastReliableAt;
+            } else {
+                this.candidate = null;
+                this.candidateSince = null;
+                this.candidatePausedAt = null;
+            }
             if (this.lastRatingSupportAt === null ||
-                event.playbackTimeSeconds * 1000 - this.lastRatingSupportAt > this.options.dropoutHoldMs) {
+                this.elapsedWallMs - this.lastRatingSupportAt > this.options.dropoutHoldMs) {
                 this.rating = null;
                 this.lastRatingChangeAt = null;
                 this.lastRatingSupportAt = null;
             }
             return this._result(sampleTime);
         }
-        this.lastReliableAt = event.playbackTimeSeconds * 1000;
+        if (this.candidatePausedAt !== null) {
+            if (proposed === this.candidate) {
+                this.candidateSince += Math.max(0, sampleWallMs - this.candidatePausedAt);
+            } else {
+                this.candidate = null;
+                this.candidateSince = null;
+            }
+            this.candidatePausedAt = null;
+        }
+        this.lastReliableAt = this.elapsedWallMs;
         if (proposed === this.rating) {
-            this.lastRatingSupportAt = event.playbackTimeSeconds * 1000;
+            this.lastRatingSupportAt = this.elapsedWallMs;
             this.candidate = null;
             this.candidateSince = null;
+            this.candidatePausedAt = null;
             return this._result(sampleTime);
         }
         if (proposed !== this.candidate) {
             this.candidate = proposed;
-            this.candidateSince = sampleMs;
+            this.candidateSince = sampleWallMs;
+            this.candidatePausedAt = null;
             return this._result(sampleTime);
         }
-        const dwell = isExperimentalTemplate
-            ? this.options.experimentalDwellMs
-            : proposed === "red"
-                ? this.options.redDwellMs : this.options.positiveDwellMs;
+        // Keep incorrect-shape feedback more conservative than a match: a
+        // short wrong note during a hand change should not flash red.
+        const dwell = proposed === "red"
+            ? this.options.redDwellMs
+            : isExperimentalTemplate
+                ? this.options.experimentalDwellMs : this.options.positiveDwellMs;
         const heldLongEnough = this.lastRatingChangeAt === null ||
-            sampleMs - this.lastRatingChangeAt >= this.options.minDisplayMs;
-        if (sampleMs - this.candidateSince >= dwell && heldLongEnough) {
+            sampleWallMs - this.lastRatingChangeAt >= this.options.minDisplayMs;
+        if (sampleWallMs - this.candidateSince >= dwell && heldLongEnough) {
             this.rating = proposed;
-            this.lastRatingChangeAt = sampleMs;
-            this.lastRatingSupportAt = event.playbackTimeSeconds * 1000;
+            this.lastRatingChangeAt = sampleWallMs;
+            this.lastRatingSupportAt = this.elapsedWallMs;
             this.candidate = null;
             this.candidateSince = null;
+            this.candidatePausedAt = null;
         }
         return this._result(sampleTime);
     }
