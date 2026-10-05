@@ -117,9 +117,8 @@ export class FeedbackRater {
             templateChordGraceMs: 120,
             positiveDwellMs: 200,
             redDwellMs: 350,
-            // Template predictions arrive every ~23 ms. Twelve consistent
-            // predictions are enough to confirm a match without adding half
-            // a second to the recognizer's ~418 ms causal audio window.
+            // Confirm 280 ms of stable evidence after the template's ~325 ms
+            // causal audio context. New predictions arrive every ~23 ms.
             experimentalDwellMs: 280,
             minDisplayMs: 300,
             dropoutHoldMs: 240,

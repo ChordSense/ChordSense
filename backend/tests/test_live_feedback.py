@@ -279,7 +279,7 @@ class SessionTests(unittest.TestCase):
                     if event.get("type") == "prediction" and event.get("chord") == "E":
                         prediction = event
             self.assertIsNotNone(prediction)
-            self.assertEqual(prediction["sample_index"], 9216)
+            self.assertEqual(prediction["sample_index"], 7168)
             self.assertEqual(prediction["model"], StreamingTemplateRecognizer.model_name)
             self.assertEqual(prediction["input_quality"], "ok")
             self.assertTrue(prediction["template_evidence"]["accepted"])
@@ -362,7 +362,13 @@ class RecognizerSelectionTests(unittest.TestCase):
             "CHORDSENSE_DSP_SHADOW": "1",
         }, clear=True):
             session = LiveFeedbackSession(recognizer_factory=FakeRecognizer)
-            self.assertIs(session.shadow_factory, StreamingTemplateRecognizer)
+            self.assertIsNotNone(session.shadow_factory)
+            shadow = session.shadow_factory()
+            try:
+                self.assertEqual(shadow.preprocessing.stft_n_fft, 2048)
+                self.assertEqual(shadow.preprocessing.context_frames, 15)
+            finally:
+                shadow.close()
         with patch.dict(os.environ, {
             "CHORDSENSE_LIVE_RECOGNIZER": "template",
             "CHORDSENSE_DSP_SHADOW": "1",
@@ -386,6 +392,9 @@ class RecognizerSelectionTests(unittest.TestCase):
                     recognizer = load_live_recognizer()
                     try:
                         self.assertIsInstance(recognizer, StreamingTemplateRecognizer)
+                        self.assertEqual(recognizer.preprocessing.stft_n_fft, 4096)
+                        self.assertEqual(recognizer.preprocessing.hop_length, 512)
+                        self.assertEqual(recognizer.preprocessing.context_frames, 7)
                     finally:
                         recognizer.close()
 

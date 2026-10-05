@@ -15,9 +15,9 @@ use spidev::{SpiModeFlags, Spidev, SpidevOptions, spidevioctl::SpidevTransfer};
 /// requires). Batching many conversions into a single `SPI_IOC_MESSAGE` with
 /// per-transfer `cs_change` was tried and is *slower* on the Pi 5 / RP1 SPI
 /// controller than one syscall per conversion — the per-CS-change overhead
-/// dominates. If the resulting sample-rate headroom is ever too thin, move to
-/// the kernel `mcp320x` IIO driver with an hrtimer trigger, not userspace
-/// batching.
+/// dominates. If the resulting sample-rate headroom is too thin, investigate
+/// buffered, paced acquisition. The upstream `mcp320x` IIO driver exposes
+/// direct reads, so it is not a drop-in buffered replacement.
 pub struct Mcp3201 {
     spi: Spidev,
 }

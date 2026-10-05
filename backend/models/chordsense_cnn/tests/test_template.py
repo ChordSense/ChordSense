@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 import numpy as np
 
@@ -8,6 +9,7 @@ from models.chordsense_cnn.template import (
     StreamingTemplateRecognizer,
     score_chroma,
 )
+from models.chordsense_cnn.streaming import DEFAULT_STREAMING_PREPROCESSING_CONFIG
 
 
 class TemplateScoreTests(unittest.TestCase):
@@ -57,7 +59,7 @@ class TemplateScoreTests(unittest.TestCase):
         small = predict(441)
         large = predict(3_000)
         self.assertGreater(len(small), 0)
-        self.assertEqual(small[0].sample_index, 9_216)
+        self.assertEqual(small[0].sample_index, 7_168)
         self.assertEqual(
             [(row.sample_index, row.chord) for row in small],
             [(row.sample_index, row.chord) for row in large],
@@ -68,12 +70,37 @@ class TemplateScoreTests(unittest.TestCase):
         ))
 
     def test_reset_restarts_causal_window(self):
-        samples = np.zeros(9_216, dtype="<i2")
+        samples = np.zeros(7_168, dtype="<i2")
         recognizer = StreamingTemplateRecognizer()
         self.assertEqual(len(recognizer.push_samples(samples)), 1)
         recognizer.reset()
-        self.assertEqual(recognizer.push_samples(samples[:2_048]), [])
-        self.assertEqual(len(recognizer.push_samples(samples[2_048:])), 1)
+        self.assertEqual(recognizer.push_samples(samples[:4_096]), [])
+        self.assertEqual(len(recognizer.push_samples(samples[4_096:])), 1)
+
+    def test_default_warms_up_at_7168_samples_without_changing_cnn_contract(self):
+        recognizer = StreamingTemplateRecognizer()
+        self.assertEqual(recognizer.push_samples(np.zeros(7167, dtype="<i2")), [])
+        first = recognizer.push_samples(np.zeros(1, dtype="<i2"))
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0].sample_index, 7168)
+        self.assertAlmostEqual(first[0].timestamp_seconds, 7168 / 22_050)
+        self.assertEqual(DEFAULT_STREAMING_PREPROCESSING_CONFIG.stft_n_fft, 2048)
+        self.assertEqual(DEFAULT_STREAMING_PREPROCESSING_CONFIG.context_frames, 15)
+
+    def test_short_context_warms_up_without_future_samples(self):
+        config = replace(DEFAULT_STREAMING_PREPROCESSING_CONFIG, context_frames=7)
+        recognizer = StreamingTemplateRecognizer(preprocessing=config)
+        span = 2048 + 6 * 512
+        self.assertEqual(recognizer.push_samples(np.zeros(span - 1, dtype="<i2")), [])
+        predictions = recognizer.push_samples(np.zeros(1, dtype="<i2"))
+        self.assertEqual(len(predictions), 1)
+        self.assertEqual(predictions[0].sample_index, span)
+        self.assertAlmostEqual(predictions[0].timestamp_seconds, span / 22_050)
+
+    def test_template_rejects_offline_feature_contract(self):
+        config = replace(DEFAULT_STREAMING_PREPROCESSING_CONFIG, feature_type="chroma_cqt")
+        with self.assertRaisesRegex(ValueError, "causal 12-bin STFT"):
+            StreamingTemplateRecognizer(preprocessing=config)
 
 
 if __name__ == "__main__":

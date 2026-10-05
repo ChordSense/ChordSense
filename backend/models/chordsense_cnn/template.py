@@ -1,7 +1,8 @@
 """Experimental, training-free major/minor chord scores from causal chroma.
 
-This recognizer uses the same feature frames as the live CNN. Its score margin
-is evidence relative to the next chord template, not a calibrated probability.
+The default uses a 4096-sample FFT and seven causal chroma frames. Explicit
+preprocessing can retain the CNN's feature contract for paired comparisons.
+Its score margin is relative evidence, not a calibrated probability.
 Signal/noise rejection belongs to the caller because per-frame chroma is peak
 normalized even when the input waveform is nearly silent.
 """
@@ -9,14 +10,24 @@ normalized even when the input waveform is nearly silent.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import numpy as np
 import numpy.typing as npt
 
+from .audio_processing import PreprocessingConfig
 from .config import CHORD_CLASSES
 from .streaming import CausalChromaExtractor, DEFAULT_STREAMING_PREPROCESSING_CONFIG
+
+
+DEFAULT_TEMPLATE_PREPROCESSING_CONFIG = replace(
+    DEFAULT_STREAMING_PREPROCESSING_CONFIG,
+    version="chroma-stft-template-v1",
+    stft_n_fft=4096,
+    hop_length=512,
+    context_frames=7,
+)
 
 
 PITCH_CLASS = {
@@ -86,7 +97,7 @@ def score_chroma(chroma: npt.ArrayLike) -> tuple[str, float, float, float, float
 
 
 class StreamingTemplateRecognizer:
-    """Score every 15-frame causal chroma window without a learned model."""
+    """Score causal chroma windows; alternate settings support replay experiments."""
 
     model_name = "chordsense-chroma-template-experimental"
 
@@ -95,13 +106,18 @@ class StreamingTemplateRecognizer:
         min_concentration: float = 0.40,
         min_root_margin: float = 0.02,
         min_quality_margin: float = 0.08,
+        *,
+        preprocessing: PreprocessingConfig = DEFAULT_TEMPLATE_PREPROCESSING_CONFIG,
     ):
         if not 0 <= min_concentration <= 1 or min_root_margin < 0 or min_quality_margin < 0:
             raise ValueError("Invalid template evidence thresholds")
         self.min_concentration = min_concentration
         self.min_root_margin = min_root_margin
         self.min_quality_margin = min_quality_margin
-        self.preprocessing = DEFAULT_STREAMING_PREPROCESSING_CONFIG
+        if (preprocessing.feature_type != "chroma_stft" or preprocessing.use_harmonic
+                or preprocessing.n_chroma != 12 or preprocessing.tuning is None):
+            raise ValueError("Template recognizer requires causal 12-bin STFT with fixed tuning")
+        self.preprocessing = preprocessing
         self.extractor = CausalChromaExtractor(
             sample_rate=self.preprocessing.sample_rate,
             n_fft=self.preprocessing.stft_n_fft,

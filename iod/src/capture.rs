@@ -213,9 +213,10 @@ const READ_CHUNK: usize = 16;
 /// Note: on the Pi 5 / RP1, per-conversion `cs_change` in a batched
 /// `SPI_IOC_MESSAGE` costs more than it saves — one `read_raw12` syscall per
 /// conversion measured faster (~45 kS/s peak vs ~23 kS/s batched). If that
-/// headroom over `SAMPLE_RATE_HZ` proves too thin under load, the fix is the
-/// kernel `mcp320x` IIO driver with an hrtimer trigger (hardware-paced, DMA),
-/// not more userspace SPI tricks.
+/// headroom over `SAMPLE_RATE_HZ` proves too thin under load, investigate a
+/// buffered, paced acquisition path. The upstream `mcp320x` IIO driver only
+/// exposes direct reads; an hrtimer trigger alone does not add buffering or
+/// hardware pacing. See docs/live-feedback-audit.md for the acquisition audit.
 fn sampling_loop(spi: Mcp3201, mode: Arc<Mutex<Mode>>, running: Arc<AtomicBool>) {
     let out_period = 1.0 / SAMPLE_RATE_HZ as f64;
     let start = Instant::now();

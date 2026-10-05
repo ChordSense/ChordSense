@@ -1,6 +1,10 @@
 # Live chord-template experiment
 
-The live backend now selects this training-free DSP recognizer by default. It uses the same 22,050 Hz PCM stream and 2,048-sample FFT / 512-sample hop / 15-frame chroma context as the verified causal-STFT CNN. The best of 24 major/minor templates is the sum of chroma at the root, third, and fifth. It starts with no prediction for about 418 ms. No HEF is needed for the default route.
+For stage equations and the current pipeline diagram, see [template signal processing](template-signal-processing.md). For the original comparison and sampling audit, see [the live feedback audit](live-feedback-audit.md).
+
+The live backend selects this training-free DSP recognizer by default. Its base configuration is a **4,096-sample FFT, 512-sample hop, and seven-frame chroma context**, with the existing 22,050 Hz PCM stream. The best of 24 major/minor templates is the sum of chroma at the root, third, and fifth. It starts with no prediction for about **325 ms**. No HEF is needed for the default route. The optional verified CNN retains its 2,048-sample FFT and 15-frame contract.
+
+`DEFAULT_TEMPLATE_PREPROCESSING_CONFIG` in `backend/models/chordsense_cnn/template.py` defines the template base. For another template configuration, pass `preprocessing=replace(DEFAULT_TEMPLATE_PREPROCESSING_CONFIG, ...)` to `StreamingTemplateRecognizer`; the live loader creates that recognizer with its base by default. `DEFAULT_STREAMING_PREPROCESSING_CONFIG` remains the CNN contract and must match its verified HEF.
 
 ## Run modes
 
@@ -20,6 +24,8 @@ CHORDSENSE_LIVE_RECOGNIZER=cnn CHORDSENSE_DSP_SHADOW=1 python app.py
 
 `CHORDSENSE_LIVE_RECOGNIZER=template` explicitly selects the same route as the default. `CHORDSENSE_DSP_SHADOW=1` has an effect only when `CHORDSENSE_LIVE_RECOGNIZER=cnn` is also set. The shadow result is attached as `dsp_experiment` to each ordinary CNN prediction event with the same `sample_index`; it does not create a second event stream or a second hardware subscriber. `dsp_experiment` includes `chord`, `signal_ok`, `ac_rms`, `concentration`, `root_margin`, `quality_margin`, and the ungated `raw_chord`. A shadow error is reported as `dsp_shadow_error` and the CNN continues.
 
+The automatic shadow factory explicitly retains the CNN's 2,048 FFT / 512 hop / 15-frame features for a comparison of scoring methods on identical preprocessing. It does not select the standalone template's new base.
+
 The default template event identifies itself with `model: chordsense-chroma-template-experimental`. Its `confidence` field is only an adapter for the existing UI threshold logic, derived from root margin; `confidence_kind: template_root_margin` marks that it is **not a calibrated probability**. The HEF/CNN route still validates its manifest when explicitly selected.
 
 ## Evidence and presentation
@@ -27,8 +33,8 @@ The default template event identifies itself with `model: chordsense-chroma-temp
 - DC-centered AC RMS below 0.008 is silence. A 150 ms signal hold avoids brief quiet gaps after a strum. Clipping is still vetoed.
 - Template concentration must be at least 0.40 and the winning root must beat the next root by at least 0.02. Otherwise the label is `N` and the UI abstains.
 - If the root is supported but the major/minor score difference is below 0.08, an otherwise matching chord is yellow. A matching seventh chord is also yellow because this scorer only resolves triads.
-- The template UI requires a chord rating to persist for 500 ms before showing it. Once green is confirmed, the overlay stays green until the chart advances to the next chord, even if later inference is contradictory or the guitar falls silent. The CNN route keeps its previous entry dwell and uses the same green latch.
-- The template route waits a full second of silence before resetting its 15-frame context. Before green has been confirmed, sustained silence clears the rating; a new chord needs another causal context after reset. Only green and red have visible overlays; yellow remains an internal uncertain rating.
+- The template UI requires a matching or uncertain chord rating to persist for 280 ms before showing it; red requires 350 ms. Template boundary grace is 120 ms. Once green is confirmed, the overlay stays green until the chart advances to the next chord, even if later inference is contradictory or the guitar falls silent. The CNN route keeps its 200 ms positive dwell and 250 ms boundary grace, and uses the same green latch.
+- The template route waits a full second of detected silence before resetting its seven-frame context. Before green has been confirmed, sustained silence clears the rating; a new chord needs another causal context after reset. Only green and red have visible overlays; yellow remains an internal uncertain rating.
 
 ## Reproduce the saved guitar replay
 
@@ -46,9 +52,9 @@ models/chord-cnn-lstm-model/venv/bin/python -m models.chordsense_cnn.benchmark_t
   --segment D:20:23 --segment G:26:29 --segment N:33:34
 ```
 
-The `--segment` labels refer to the *played* chord and deliberately avoid change boundaries; their timings are approximate. With the current code, the first take has E 129/129, A 108/108, D 108/108, and G 101/108 exact named windows; the seven remaining G windows say Gm. The second has E 129/129, A 107/107, D 123/123, and G 123/123 exact named windows. The G evidence is mostly quality-uncertain: zero first-take G windows and ten second-take G windows are green-eligible. The selected quiet intervals produce no named predictions.
+The `--segment` labels refer to the *played* chord and deliberately avoid change boundaries; their timings are approximate. With the 4,096/seven-frame base, the first take has E 129/129, A 108/108, D 108/108, and G 108/108 exact windows. The second has E 129/129, A 107/107, D 130/130, and G 128/129 exact windows, with one G abstention. Zero first-take G windows and 61 second-take G windows are green-eligible; major/minor uncertainty still matters even when the chord name is correct. The selected quiet intervals produce no named predictions.
 
-On 147 held-out recordings, an exploratory feature replay found 25,913/30,474 audible chord windows passed the signal/root/concentration gate, with 94.1% exact labels among accepted windows. It also accepted 151/8,904 labeled noise windows. These windows are highly correlated and most chords came from one guitar; the recording, rather than the window, is the independent unit. A held-out F recording was called A#m in 181/235 audible windows, which a longer UI dwell cannot correct. Because confirmed green now persists to the end of a chart segment, a false green would persist too; deliberate wrong-chord trials are essential. The saved guitar takes had playback paused, so they do not test playback bleed or the complete UI loop.
+On 147 held-out recordings, an exploratory replay of the previous 2,048/15-frame features found 25,913/30,474 audible chord windows passed the signal/root/concentration gate, with 94.1% exact labels among accepted windows. It also accepted 151/8,904 labeled noise windows. These windows are highly correlated and most chords came from one guitar; the recording, rather than the window, is the independent unit. A held-out F recording was called A#m in 181/235 audible windows, which a longer UI dwell cannot correct. Because confirmed green now persists to the end of a chart segment, a false green would persist too; deliberate wrong-chord trials are essential. The saved guitar takes had playback paused, so they do not test playback bleed or the complete UI loop.
 
 ## Live test before relying on it
 

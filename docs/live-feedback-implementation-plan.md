@@ -1,6 +1,6 @@
 # Live chord feedback during playback
 
-**Current recognizer selection:** The backend now uses the DSP chord-template recognizer by default; no HEF is needed for that route. Set `CHORDSENSE_LIVE_RECOGNIZER=cnn` to use the verified HEF/CNN route. For a sample-aligned comparison while the UI rates the CNN, set both `CHORDSENSE_LIVE_RECOGNIZER=cnn` and `CHORDSENSE_DSP_SHADOW=1`. See [the DSP experiment guide](dsp-template-experiment.md) for the current run commands and limitations. The implementation history below describes how the original CNN route was built and verified.
+**Current recognizer selection:** The backend uses the DSP chord-template recognizer by default, with a 4,096-sample FFT, 512-sample hop and seven-frame context (about 325 ms); no HEF is needed for that route. Set `CHORDSENSE_LIVE_RECOGNIZER=cnn` to use the verified HEF/CNN route, which retains its 2,048 FFT and 15-frame contract. For a sample-aligned comparison on that original contract while the UI rates the CNN, set both `CHORDSENSE_LIVE_RECOGNIZER=cnn` and `CHORDSENSE_DSP_SHADOW=1`. See [the DSP experiment guide](dsp-template-experiment.md) for the current run commands and limitations, and [template signal processing](template-signal-processing.md) for stage equations. The implementation history below describes how the original CNN route was built and verified.
 
 ## Goal and scope
 

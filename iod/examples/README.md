@@ -28,9 +28,16 @@ naming, DC removal), not an example binary — hence `autoexamples = false` in
 
 Userspace `spidev` polling tops out around **45 kS/s** and sags toward
 ~15–20 kS/s under CPU/bus contention — thin headroom over the 22 050 Hz capture
-target. The resampler in `capture.rs` keeps a dominant tone pitch-accurate to
-~1–2 cents even when starved, but real broadband audio would lose its top
-octave whenever the native rate drops below ~44 kHz. Batching conversions into
-one `SPI_IOC_MESSAGE` makes it *worse* (per-CS-change overhead). The durable
-fix, if the headroom proves inadequate in the field, is the kernel `mcp320x`
-IIO driver with an hrtimer trigger (hardware-paced, DMA).
+target. Earlier tone tests found roughly 1–2 cents of pitch error, but output
+cadence and a single tone do not establish broadband fidelity. Native rates
+below 22,050 Hz cannot provide the full bandwidth of the 22,050 Hz output;
+linear interpolation cannot recover missing information. Downsampling also
+needs a verified anti-alias filter. Batching conversions into one
+`SPI_IOC_MESSAGE` was slower in those tests (per-CS-change overhead).
+
+Buffered, paced acquisition is a candidate if headroom is inadequate. The
+[upstream `mcp320x` driver](https://github.com/torvalds/linux/blob/master/drivers/iio/adc/mcp320x.c)
+uses direct reads, with no triggered-buffer setup. A software hrtimer trigger
+alone does not supply hardware pacing or DMA. Check the deployed kernel and
+driver capabilities before choosing that migration. See the
+[current live feedback audit](../../docs/live-feedback-audit.md).

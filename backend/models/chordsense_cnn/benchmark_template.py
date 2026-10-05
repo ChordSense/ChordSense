@@ -14,7 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .template import StreamingTemplateRecognizer
+from .audio_processing import PreprocessingConfig
+from .template import DEFAULT_TEMPLATE_PREPROCESSING_CONFIG, StreamingTemplateRecognizer
 
 
 SAMPLE_RATE = 22_050
@@ -41,9 +42,13 @@ def parse_segment(value: str) -> tuple[str, float, float]:
     return label, start_time, end_time
 
 
-def replay(samples: np.ndarray) -> list[dict]:
+def replay(
+    samples: np.ndarray,
+    *,
+    preprocessing: PreprocessingConfig = DEFAULT_TEMPLATE_PREPROCESSING_CONFIG,
+) -> list[dict]:
     """Mirror the selected template route's AC gate and long-silence reset."""
-    recognizer = StreamingTemplateRecognizer()
+    recognizer = StreamingTemplateRecognizer(preprocessing=preprocessing)
     events: list[dict] = []
     base_sample: int | None = None
     silence_samples = 0

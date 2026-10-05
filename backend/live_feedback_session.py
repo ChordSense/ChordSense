@@ -111,7 +111,11 @@ class LiveFeedbackSession:
                 "CHORDSENSE_LIVE_RECOGNIZER", DEFAULT_LIVE_RECOGNIZER
             ).lower() == "cnn"
         ):
-            self.shadow_factory = StreamingTemplateRecognizer
+            # Compare scorers on the CNN's identical feature contract. The
+            # standalone template default uses its separately tuned 4096/7 path.
+            self.shadow_factory = lambda: StreamingTemplateRecognizer(
+                preprocessing=DEFAULT_STREAMING_PREPROCESSING_CONFIG
+            )
         self._condition = threading.Condition()
         self._lifecycle_lock = threading.RLock()
         self._events: deque[dict] = deque(maxlen=128)
