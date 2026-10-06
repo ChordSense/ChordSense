@@ -40,6 +40,7 @@ const state = {
  * `player` mirrors the active transport clock for chord and feedback sync.
  */
 const STATUS_POLL_MS = 250;
+let statusPollPending = false;
 
 const player = {
     loaded: false,
@@ -122,6 +123,7 @@ async function loadPlayback(source) {
 async function syncPlaybackStatus() {
     if (
         !player.loaded ||
+        statusPollPending ||
         seekSlider.matches(":active")
     ) {
         return;
@@ -132,6 +134,7 @@ async function syncPlaybackStatus() {
 
     let result;
 
+    statusPollPending = true;
     try {
         result = localPlayback
             ? localPlayback.status()
@@ -142,6 +145,8 @@ async function syncPlaybackStatus() {
             error
         );
         return;
+    } finally {
+        statusPollPending = false;
     }
 
     if (generation !== player.generation) {
@@ -1872,6 +1877,7 @@ function updatePlayerUI() {
 
     updateControls();
     syncFocusedView();
+    schedulePlaybackFrame();
 }
 
 function formatTime(seconds) {
@@ -1899,26 +1905,39 @@ function formatTime(seconds) {
 }
 
 let lastVisualFrame = 0;
-function playbackLoop(frameTime) {
-    if (!player.paused) {
-        // Update the position and narrow timing stroke without rewriting
-        // static controls or repainting a gradient on every visual frame.
-        if (frameTime - lastVisualFrame >= 30) {
-            updatePlaybackPositionUI();
-            updateChordDisplay();
-            lastVisualFrame = frameTime;
-        }
-        advanceFeedback();
+let playbackFrame = null;
+function schedulePlaybackFrame() {
+    if (player.paused || document.hidden) {
+        if (playbackFrame !== null) cancelAnimationFrame(playbackFrame);
+        playbackFrame = null;
+    } else if (playbackFrame === null) {
+        playbackFrame = requestAnimationFrame(playbackLoop);
     }
-
-    requestAnimationFrame(
-        playbackLoop
-    );
 }
 
-requestAnimationFrame(
-    playbackLoop
-);
+function playbackLoop(frameTime) {
+    playbackFrame = null;
+    if (player.paused || document.hidden) return;
+
+    // Update the position and narrow timing stroke without rewriting
+    // static controls or repainting a gradient on every visual frame.
+    if (frameTime - lastVisualFrame >= 30) {
+        updatePlaybackPositionUI();
+        updateChordDisplay();
+        lastVisualFrame = frameTime;
+    }
+    advanceFeedback();
+    schedulePlaybackFrame();
+}
+
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+        schedulePlaybackFrame();
+    } else {
+        void syncPlaybackStatus();
+        schedulePlaybackFrame();
+    }
+});
 
 loadButton.addEventListener(
     "click",

@@ -5,9 +5,12 @@ touches SPI0 (the MCP3201 ADC on the analog front-end) or I2S (the PCM5102A
 DAC). `backend/` talks to it over a Unix socket; nothing else should open
 `/dev/spidev0.0` or ALSA directly.
 
-The ADC sampling thread runs **continuously from daemon start**, forever,
-independent of whether anything is "recording". Starting a capture or a stream
-just attaches a sink to that always-running feed.
+The ADC sampling thread sleeps while the daemon is **idle**, without reading
+SPI. Starting a capture or the first live stream wakes it; stopping the capture
+or the last stream puts it back to sleep. Active sampling still runs continuously
+on the same 22,050 Hz output grid. Each restart primes fresh interpolation state,
+so an idle interval never becomes synthetic recorded audio; stream sample indices
+remain monotonic across sessions.
 
 - [Build](#build)
 - [Run as a systemd service](#run-as-a-systemd-service) (recommended)
@@ -150,7 +153,7 @@ Fields that don't apply to a given response are omitted.
 
 | `cmd` | Extra request fields | Success response | Notes |
 |---|---|---|---|
-| `start_capture` | — | `{"ok":true}` | Attaches a WAV sink to the live ADC feed. Errors if a capture or stream is already running. |
+| `start_capture` | — | `{"ok":true}` | Wakes the ADC reader and starts a WAV sink. Errors if a capture or stream is already running. |
 | `stop_capture` | — | `{"ok":true,"wav_path":"/abs/capture-<ms>.wav","duration_s":4.2}` | Finalizes the WAV. `duration_s` is `samples_written / 22050`. Errors if no capture is running or nothing was recorded. |
 | `load` | `path` (abs path to an audio file) | `{"ok":true,"duration_secs":214.2}` | Loads the file paused at 0. `duration_secs` omitted if the decoder can't tell. |
 | `play` | `path` (abs path to an audio file) | `{"ok":true,"duration_secs":214.2}` | `load` + `resume`. Decodes via `rodio` (WAV/FLAC/MP3/OGG…). |
