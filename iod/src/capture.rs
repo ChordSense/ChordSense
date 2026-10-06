@@ -285,6 +285,11 @@ fn sampling_loop(
             primed = false;
             active_generation = generation;
         }
+        // Do not hold the mode lock across SPI reads. A stop request must be
+        // able to detach its sink promptly even under SCHED_FIFO sampling.
+        // One in-flight read batch may finish; the mode/generation check below
+        // discards it after stop or restart.
+        drop(guard);
         raw.clear();
         let mut read_err = None;
         for _ in 0..READ_CHUNK {
@@ -296,9 +301,6 @@ fn sampling_loop(
                 }
             }
         }
-        // A mode change waits for at most one short batch. Once a stop call
-        // sets Idle, no new SPI reads can race past it.
-        drop(guard);
         if raw.is_empty() {
             if let Some(err) = read_err {
                 eprintln!("chordsense-iod: SPI read failed: {err}");
@@ -490,8 +492,13 @@ mod tests {
 
         fn assert_idle(&self) {
             let before = self.reads.load(Ordering::Relaxed);
+            // A stop may leave the batch that was already in flight. It must
+            // finish that batch and then block without further SPI reads.
             thread::sleep(Duration::from_millis(20));
-            assert_eq!(self.reads.load(Ordering::Relaxed), before, "ADC read while idle");
+            let settled = self.reads.load(Ordering::Relaxed);
+            assert!(settled - before <= READ_CHUNK as u64, "ADC kept reading while idle");
+            thread::sleep(Duration::from_millis(20));
+            assert_eq!(self.reads.load(Ordering::Relaxed), settled, "ADC read while idle");
         }
     }
 
@@ -575,6 +582,52 @@ mod tests {
         assert!(!samples.is_empty());
         assert!(samples.iter().all(|&sample| sample == 16_384));
         assert_eq!(result.duration_s, samples.len() as f64 / SAMPLE_RATE_HZ as f64);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn stop_capture_does_not_wait_for_an_inflight_spi_read() {
+        let control = Arc::new(SamplerControl::new());
+        let running = Arc::new(AtomicBool::new(true));
+        let sampler = AdcSampler {
+            control: Arc::clone(&control),
+            running: Arc::clone(&running),
+            next_subscriber_id: Arc::new(AtomicU64::new(0)),
+        };
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut first_read = true;
+            sampling_loop(
+                move || {
+                    if first_read {
+                        first_read = false;
+                        entered_tx.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                    }
+                    Ok(2048)
+                },
+                control,
+                running,
+            );
+        });
+        let path = std::env::temp_dir().join(format!(
+            "chordsense-stop-latency-{}-{}.wav", std::process::id(), monotonic_ns()
+        ));
+        sampler.start_capture(&path).unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let stopped_sampler = sampler.clone();
+        let (stopped_tx, stopped_rx) = mpsc::channel();
+        let stopper = thread::spawn(move || {
+            stopped_tx.send(stopped_sampler.stop_capture()).unwrap();
+        });
+        let stopped_while_reader_waited = stopped_rx.recv_timeout(Duration::from_millis(300));
+        release_tx.send(()).unwrap();
+        stopper.join().unwrap();
+        sampler.shutdown();
+        worker.join().unwrap();
+        assert!(stopped_while_reader_waited.is_ok(), "stop waited for SPI read");
+        assert!(stopped_while_reader_waited.unwrap().is_err());
         std::fs::remove_file(path).unwrap();
     }
 
