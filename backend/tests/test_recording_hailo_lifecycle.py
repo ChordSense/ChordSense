@@ -19,11 +19,13 @@ class RecordingHailoLifecycleTests(unittest.TestCase):
         recognizer.analyze_file.return_value = result
         recognizer.write_lab_file.return_value = True
         with patch.object(backend_app.iod, "stop_capture", return_value=(self.wav_path, 1.0)), \
-             patch.object(backend_app, "create_recording_recognizer", return_value=recognizer):
+             patch.object(backend_app, "create_recording_recognizer", return_value=recognizer), \
+             patch.object(backend_app, "save_recording_analysis", return_value={"name": "Recording #1"}) as save_recording:
             response = self.client.post("/end_recording")
 
         self.assertEqual(response.status_code, 200)
         recognizer.close.assert_called_once_with()
+        save_recording.assert_called_once_with(self.wav_path, [], 1.0)
 
     def test_recording_releases_hailo_after_analysis_failure(self):
         recognizer = Mock()

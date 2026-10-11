@@ -40,6 +40,7 @@ const state = {
  * `player` mirrors the active transport clock for chord and feedback sync.
  */
 const STATUS_POLL_MS = 250;
+let statusPollPending = false;
 
 const player = {
     loaded: false,
@@ -122,6 +123,7 @@ async function loadPlayback(source) {
 async function syncPlaybackStatus() {
     if (
         !player.loaded ||
+        statusPollPending ||
         seekSlider.matches(":active")
     ) {
         return;
@@ -132,6 +134,7 @@ async function syncPlaybackStatus() {
 
     let result;
 
+    statusPollPending = true;
     try {
         result = localPlayback
             ? localPlayback.status()
@@ -142,6 +145,8 @@ async function syncPlaybackStatus() {
             error
         );
         return;
+    } finally {
+        statusPollPending = false;
     }
 
     if (generation !== player.generation) {
@@ -616,7 +621,7 @@ const thenLabel = document.querySelector("#then-label");
 const currentFallback = document.querySelector("#current-fallback");
 const nextFallback = document.querySelector("#next-fallback");
 const thenFallback = document.querySelector("#then-fallback");
-const chordHalo = document.querySelector("#chord-halo");
+const chordTimerProgress = document.querySelector("#chord-timer-progress");
 const chordProgress = document.querySelector("#chord-progress");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -1399,17 +1404,23 @@ function updateChordDisplay() {
     }
 
     // The sweep uses the same original-song clock as seeking and feedback.
-    const visibleProgress = reducedMotion.matches
-        ? Math.floor(progression.progress * 10) / 10
-        : progression.progress;
-    chordHalo.style.setProperty("--halo-angle", `${visibleProgress * 360}deg`);
-    chordProgress.setAttribute("aria-valuenow", String(Math.round(progression.progress * 100)));
-    chordProgress.setAttribute(
-        "aria-valuetext",
-        progression.current
-            ? `${progression.remaining.toFixed(1)} seconds until ${progression.next ? "next chord" : "song end"}`
-            : "No active chord"
-    );
+    const percent = Math.round(progression.progress * 100);
+    const visiblePercent = reducedMotion.matches
+        ? Math.floor(percent / 10) * 10
+        : percent;
+    const offset = String(100 - visiblePercent);
+    if (chordTimerProgress.getAttribute("stroke-dashoffset") !== offset) {
+        chordTimerProgress.setAttribute("stroke-dashoffset", offset);
+    }
+    if (chordProgress.getAttribute("aria-valuenow") !== String(percent)) {
+        chordProgress.setAttribute("aria-valuenow", String(percent));
+    }
+    const timeUntilChange = progression.current
+        ? `${progression.remaining.toFixed(1)} seconds until ${progression.next ? "next chord" : "song end"}`
+        : "No active chord";
+    if (chordProgress.getAttribute("aria-valuetext") !== timeUntilChange) {
+        chordProgress.setAttribute("aria-valuetext", timeUntilChange);
+    }
 }
 
 function updateControls() {
@@ -1835,34 +1846,38 @@ function getDuration() {
     );
 }
 
-function updatePlayerUI() {
+function updatePlaybackPositionUI() {
     const duration =
         getDuration();
 
-    seekSlider.max =
-        duration || 0;
+    const seekMax = String(duration || 0);
+    if (seekSlider.max !== seekMax) seekSlider.max = seekMax;
 
     if (!seekSlider.matches(":active")) {
         seekSlider.value =
             player.currentTime || 0;
     }
 
-    timeDisplay.textContent =
-        `${formatTime(player.currentTime)} / ` +
-        `${formatTime(duration)}`;
+    const timeText = `${formatTime(player.currentTime)} / ${formatTime(duration)}`;
+    if (timeDisplay.textContent !== timeText) timeDisplay.textContent = timeText;
+}
 
-    playPauseImage.src =
-        player.paused
-            ? "assets/icons/play-button.png"
-            : "assets/icons/pause.png";
+function updatePlayerUI() {
+    updatePlaybackPositionUI();
 
-    playPauseButton.setAttribute(
-        "aria-label",
-        player.paused ? "Play" : "Pause"
-    );
+    const icon = player.paused
+        ? "assets/icons/play-button.png"
+        : "assets/icons/pause.png";
+    if (playPauseImage.getAttribute("src") !== icon) playPauseImage.src = icon;
+
+    const playLabel = player.paused ? "Play" : "Pause";
+    if (playPauseButton.getAttribute("aria-label") !== playLabel) {
+        playPauseButton.setAttribute("aria-label", playLabel);
+    }
 
     updateControls();
     syncFocusedView();
+    schedulePlaybackFrame();
 }
 
 function formatTime(seconds) {
@@ -1890,26 +1905,39 @@ function formatTime(seconds) {
 }
 
 let lastVisualFrame = 0;
-function playbackLoop(frameTime) {
-    if (!player.paused) {
-        // A 30 Hz display sweep is smooth at the Pi's mirrored resolution
-        // while leaving its main thread time for transport and input.
-        if (frameTime - lastVisualFrame >= 30) {
-            updatePlayerUI();
-            updateChordDisplay();
-            lastVisualFrame = frameTime;
-        }
-        advanceFeedback();
+let playbackFrame = null;
+function schedulePlaybackFrame() {
+    if (player.paused || document.hidden) {
+        if (playbackFrame !== null) cancelAnimationFrame(playbackFrame);
+        playbackFrame = null;
+    } else if (playbackFrame === null) {
+        playbackFrame = requestAnimationFrame(playbackLoop);
     }
-
-    requestAnimationFrame(
-        playbackLoop
-    );
 }
 
-requestAnimationFrame(
-    playbackLoop
-);
+function playbackLoop(frameTime) {
+    playbackFrame = null;
+    if (player.paused || document.hidden) return;
+
+    // Update the position and narrow timing stroke without rewriting
+    // static controls or repainting a gradient on every visual frame.
+    if (frameTime - lastVisualFrame >= 30) {
+        updatePlaybackPositionUI();
+        updateChordDisplay();
+        lastVisualFrame = frameTime;
+    }
+    advanceFeedback();
+    schedulePlaybackFrame();
+}
+
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+        schedulePlaybackFrame();
+    } else {
+        void syncPlaybackStatus();
+        schedulePlaybackFrame();
+    }
+});
 
 loadButton.addEventListener(
     "click",

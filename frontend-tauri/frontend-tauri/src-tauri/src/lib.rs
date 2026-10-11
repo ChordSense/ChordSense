@@ -59,8 +59,14 @@ pub fn run() {
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::OnceLock;
 
 const BACKEND_URL: &str = "http://127.0.0.1:5051";
+
+fn playback_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
 
 #[derive(
     Debug,
@@ -794,7 +800,7 @@ async fn playback_command(
         return Err(format!("Unknown playback action: {action}"));
     }
 
-    let response = reqwest::Client::new()
+    let response = playback_client()
         .post(format!("{BACKEND_URL}/playback/{action}"))
         .json(&body.unwrap_or_else(|| serde_json::json!({})))
         .send()
@@ -806,7 +812,9 @@ async fn playback_command(
 
 #[tauri::command]
 async fn playback_status() -> Result<serde_json::Value, String> {
-    let response = reqwest::get(format!("{BACKEND_URL}/playback/status"))
+    let response = playback_client()
+        .get(format!("{BACKEND_URL}/playback/status"))
+        .send()
         .await
         .map_err(|e| format!("Could not reach backend for playback: {e}"))?;
 

@@ -42,13 +42,15 @@ fn main() {
     };
 
     println!(
-        "chordsense-iod: SPI sampling from {spi_device} at {} Hz, captures -> {}, listening on {socket_path}",
+        "chordsense-iod: ADC ready on {spi_device} at {} Hz when active, captures -> {}, listening on {socket_path}",
         capture::SAMPLE_RATE_HZ,
         captures_dir.display(),
     );
 
-    let daemon = Daemon::new(sampler, playback, captures_dir);
-    if let Err(err) = daemon.serve(PathBuf::from(&socket_path)) {
+    let daemon = Daemon::new(sampler.clone(), playback, captures_dir);
+    let result = daemon.serve(PathBuf::from(&socket_path));
+    sampler.shutdown();
+    if let Err(err) = result {
         eprintln!("chordsense-iod: socket server failed: {err}");
         std::process::exit(1);
     }
