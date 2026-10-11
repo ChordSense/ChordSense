@@ -32,6 +32,8 @@ pub fn run() {
 
                 list_uploaded_audio,
                 load_uploaded_audio,
+                list_recordings,
+                delete_recording,
 
                 begin_recording,
                 end_recording,
@@ -277,6 +279,76 @@ struct ChordSegment {
     confidence: f64,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct SavedRecording {
+    id: u64,
+    name: String,
+    wav_path: String,
+    size: u64,
+    modified: String,
+
+    #[serde(default)]
+    duration: f64,
+
+    #[serde(default)]
+    chords: Vec<ChordSegment>,
+}
+
+#[tauri::command]
+async fn list_recordings() -> Result<Vec<SavedRecording>, String> {
+    let response = reqwest::get(
+        format!("{BACKEND_URL}/api/recordings")
+    )
+    .await
+    .map_err(|e| format!("Could not reach recordings library: {e}"))?;
+
+    let status = response.status();
+
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Invalid recordings response: {e}"))?;
+
+    if !status.is_success() || payload["success"].as_bool() != Some(true) {
+        return Err(
+            payload["error"]
+                .as_str()
+                .unwrap_or("Could not list recordings.")
+                .to_string()
+        );
+    }
+
+    serde_json::from_value(payload["recordings"].clone())
+        .map_err(|e| format!("Could not read saved recordings: {e}"))
+}
+
+#[tauri::command]
+async fn delete_recording(id: u64) -> Result<(), String> {
+    let response = reqwest::Client::new()
+        .delete(format!("{BACKEND_URL}/api/recordings/{id}"))
+        .send()
+        .await
+        .map_err(|e| format!("Could not delete recording: {e}"))?;
+
+    let status = response.status();
+
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Invalid delete response: {e}"))?;
+
+    if !status.is_success() || payload["success"].as_bool() != Some(true) {
+        return Err(
+            payload["error"]
+                .as_str()
+                .unwrap_or("Recording could not be deleted.")
+                .to_string()
+        );
+    }
+
+    Ok(())
+}
+
 fn default_confidence() -> f64 {
     1.0
 }
@@ -328,6 +400,9 @@ struct AnalyzeResponse {
     /// play the take back. Absent for /analyze (the UI already has that file).
     #[serde(default)]
     wav_path: Option<String>,
+
+    #[serde(default)]
+    recording_name: Option<String>,
 }
 
 async fn analyze_audio_bytes(

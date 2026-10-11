@@ -404,7 +404,26 @@
                 </button>
 
             </header>
+            
+            <div class="audio-library-tabs">
+                <button
+                    id="library-uploaded-tab"
+                    class="library-tab active"
+                    type="button"
+                    aria-pressed="true"
+                >
+                    Uploaded Songs
+                </button>
 
+                <button
+                    id="library-recordings-tab"
+                    class="library-tab"
+                    type="button"
+                    aria-pressed="false"
+                >
+                    Recordings
+                </button>
+            </div>
 
             <div class="audio-library-shortcuts">
                 ↑ ↓ Navigate
@@ -420,7 +439,7 @@
                 class="audio-library-list"
                 role="listbox"
                 tabindex="0"
-                aria-label="Uploaded songs"
+                aria-label="Songs and Recordings"
             ></div>
 
 
@@ -477,6 +496,38 @@
         </section>
 
     </div>
+
+    <dialog
+        id="delete-recording-dialog"
+        class="delete-recording-dialog"
+        aria-labelledby="delete-recording-title"
+    >
+        <form method="dialog">
+            <h3 id="delete-recording-title">
+                Delete recording?
+            </h3>
+
+            <p>
+                Are you sure you want to delete
+                <strong id="delete-recording-name"></strong>?
+                This cannot be undone.
+            </p>
+
+            <div class="delete-recording-actions">
+                <button type="submit" value="cancel">
+                    Cancel
+                </button>
+
+                <button
+                    class="delete-confirm-button"
+                    type="submit"
+                    value="delete"
+                >
+                    Delete Recording
+                </button>
+            </div>
+        </form>
+    </dialog>
 
 </main>
 
