@@ -22,6 +22,12 @@ from analysis_cache import (
     save_cache_entry,
 )
 
+from recordings_library import (
+    list_recordings as get_saved_recordings,
+    save_recording_analysis,
+    delete_recording as remove_saved_recording,
+)
+
 BASE_DIR = Path(__file__).resolve().parent
 # Original: MODEL_REPO = BASE_DIR / "model_repo"
 MODEL_REPO = BASE_DIR / "models" / "chord-cnn-lstm-model"
@@ -395,6 +401,38 @@ def analyze():
         ):
             output_lab_path.unlink()
 
+@app.get("/api/recordings")
+def recordings_list():
+    try:
+        return jsonify({
+            "success": True,
+            "recordings": get_saved_recordings(),
+        })
+    except Exception as error:
+        return jsonify({
+            "success": False,
+            "error": str(error),
+        }), 500
+
+
+@app.delete("/api/recordings/<int:recording_id>")
+def recordings_delete(recording_id):
+    try:
+        remove_saved_recording(recording_id)
+        return jsonify({
+            "success": True,
+            "message": "Recording deleted.",
+        })
+    except FileNotFoundError:
+        return jsonify({
+            "success": False,
+            "error": "Recording not found.",
+        }), 404
+    except Exception as error:
+        return jsonify({
+            "success": False,
+            "error": str(error),
+        }), 500
 
 @app.post("/begin_recording")
 def begin_recording():
@@ -444,6 +482,12 @@ def end_recording():
         ]
         print(f"Hailo inference produced {len(chords)} chord segments.", flush=True)
 
+        saved_recording = save_recording_analysis(
+            wav_path,
+            chords,
+            result.duration_seconds,
+        )
+
         return jsonify({
             "success": True,
             "chords": chords,
@@ -457,6 +501,7 @@ def end_recording():
             "stderr": "",
             "lab_file": str(output_lab_path),
             "wav_path": str(wav_path),
+            "recording_name": saved_recording["name"],
         })
     except IodError as e:
         print(f"End recording failed (iod): {e}", flush=True)

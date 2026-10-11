@@ -1,4 +1,4 @@
-// macOS preview playback. The Pi keeps using iod and its I2S output.
+// Desktop preview playback. The Pi keeps using iod and its I2S output.
 const AUDIO_TYPES = {
     wav: "audio/wav",
     mp3: "audio/mpeg",
@@ -44,7 +44,7 @@ export class LocalPlayback {
                 };
                 const failed = () => {
                     cleanup();
-                    reject(new Error("This audio file could not be played on this Mac."));
+                    reject(new Error("This audio file could not be played on this device."));
                 };
                 this.audio.addEventListener("loadedmetadata", loaded);
                 this.audio.addEventListener("error", failed);

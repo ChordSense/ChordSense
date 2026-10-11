@@ -8,7 +8,7 @@ import { LocalPlayback } from "./local-playback.js";
 
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
-const localPlayback = /Macintosh|Mac OS X/.test(navigator.userAgent)
+const localPlayback = /Windows|Macintosh|Mac OS X/.test(navigator.userAgent)
     ? new LocalPlayback(source => source.path
         ? invoke("load_audio_file", { path: source.path })
         : invoke("load_uploaded_audio", { filename: source.upload }))
@@ -200,6 +200,11 @@ const audioLibraryEmpty = document.querySelector("#audio-library-empty");
 
 const audioLibraryStatus = document.querySelector("#audio-library-status");
 
+const uploadedSongsTab = document.querySelector("#library-uploaded-tab");
+const recordingsTab = document.querySelector("#library-recordings-tab");
+const deleteRecordingDialog = document.querySelector("#delete-recording-dialog");
+const deleteRecordingName = document.querySelector("#delete-recording-name");
+
 const closeAudioLibraryButton = document.querySelector("#close-audio-library");
 
 const cancelAudioLibraryButton = document.querySelector("#cancel-audio-library");
@@ -209,10 +214,10 @@ const loadLibrarySongButton = document.querySelector("#load-library-song");
 const browseLocalAudioButton = document.querySelector("#browse-local-audio");
 const libraryState = {
     open: false,
-
+    tab: "songs",
     songs: [],
-
     selectedIndex: -1,
+    requestGeneration: 0,
 };
 
 const analyzeButton = document.querySelector("#analyze");
@@ -733,6 +738,11 @@ function renderAudioLibrary() {
 
     if (!libraryState.songs.length) {
 
+        audioLibraryEmpty.textContent =
+        libraryState.tab === "recordings"
+            ? "No recordings yet."
+            : "No songs uploaded yet.";
+
         audioLibraryEmpty.classList.remove(
             "hidden"
         );
@@ -826,9 +836,29 @@ function renderAudioLibrary() {
             );
 
 
-            audioLibraryList.appendChild(
-                row
-            );
+            if (libraryState.tab === "recordings") {
+                const item = document.createElement("div");
+                item.className = "audio-library-item";
+                item.setAttribute("role", "presentation");
+
+                const deleteButton = document.createElement("button");
+                deleteButton.type = "button";
+                deleteButton.className = "audio-library-delete";
+                deleteButton.textContent = "Delete";
+                deleteButton.setAttribute(
+                    "aria-label",
+                    `Delete ${song.name}`
+                );
+
+                deleteButton.addEventListener("click", () => {
+                    void confirmDeleteRecording(song);
+                });
+
+                item.append(row, deleteButton);
+                audioLibraryList.appendChild(item);
+            } else {
+                audioLibraryList.appendChild(row);
+            }
         }
     );
 
@@ -914,108 +944,93 @@ function selectLibrarySong(index) {
         false;
 }
 
-async function openAudioLibrary() {
+async function loadLibraryTab(tab) {
+    libraryState.tab = tab;
+    libraryState.songs = [];
+    libraryState.selectedIndex = -1;
 
-    libraryState.open =
-        true;
+    const requestGeneration = ++libraryState.requestGeneration;
 
-    libraryState.songs =
-        [];
+    uploadedSongsTab.classList.toggle("active", tab === "songs");
+    recordingsTab.classList.toggle("active", tab === "recordings");
 
-    libraryState.selectedIndex =
-        -1;
-
-
-    audioLibraryModal.classList.remove(
-        "hidden"
+    uploadedSongsTab.setAttribute(
+        "aria-pressed",
+        String(tab === "songs")
     );
 
-    audioLibraryModal.setAttribute(
-        "aria-hidden",
-        "false"
+    recordingsTab.setAttribute(
+        "aria-pressed",
+        String(tab === "recordings")
     );
-
 
     audioLibraryList.replaceChildren();
+    audioLibraryEmpty.classList.add("hidden");
+    loadLibrarySongButton.disabled = true;
 
-    audioLibraryEmpty.classList.add(
-        "hidden"
-    );
-
-    loadLibrarySongButton.disabled =
-        true;
-
-
-    audioLibraryStatus.classList.remove(
-        "error"
-    );
-
+    audioLibraryStatus.classList.remove("error");
     audioLibraryStatus.textContent =
-        "Loading uploaded songs...";
-
+        tab === "recordings"
+            ? "Loading recordings..."
+            : "Loading uploaded songs...";
 
     try {
+        const command = tab === "recordings"
+            ? "list_recordings"
+            : "list_uploaded_audio";
 
-        const songs =
-            await invoke(
-                "list_uploaded_audio"
-            );
+        const songs = await invoke(command);
 
+        if (!libraryState.open ||
+            requestGeneration !== libraryState.requestGeneration) {
+            return;
+        }
 
-        libraryState.songs =
-            songs ?? [];
-
-
+        libraryState.songs = songs ?? [];
         libraryState.selectedIndex =
-            libraryState.songs.length
-                ? 0
-                : -1;
+            libraryState.songs.length ? 0 : -1;
 
+        const count = libraryState.songs.length;
 
-        audioLibraryStatus.textContent =
-            libraryState.songs.length
-                ? `${libraryState.songs.length} song${
-                    libraryState.songs.length === 1
-                        ? ""
-                        : "s"
-                  } available.`
-                : "";
-
+        audioLibraryStatus.textContent = count
+            ? `${count} ${tab === "recordings"
+                ? (count === 1 ? "recording" : "recordings")
+                : (count === 1 ? "song" : "songs")} available.`
+            : "";
 
         renderAudioLibrary();
 
-
-        requestAnimationFrame(
-            () => {
-                audioLibraryList.focus();
-            }
-        );
+        requestAnimationFrame(() => {
+            if (libraryState.open) audioLibraryList.focus();
+        });
 
     } catch (error) {
+        if (requestGeneration !== libraryState.requestGeneration) return;
 
         console.error(error);
-
-        audioLibraryStatus.classList.add(
-            "error"
-        );
-
+        audioLibraryStatus.classList.add("error");
         audioLibraryStatus.textContent =
-            `Could not load ChordSense Library: ${error}`;
+            `Could not load library: ${error}`;
 
-        audioLibraryEmpty.classList.remove(
-            "hidden"
-        );
-
-        audioLibraryEmpty.textContent =
-            "ChordSense Library is unavailable.";
+        audioLibraryEmpty.textContent = "Library unavailable.";
+        audioLibraryEmpty.classList.remove("hidden");
     }
+}
+
+async function openAudioLibrary() {
+    libraryState.open = true;
+
+    audioLibraryModal.classList.remove("hidden");
+    audioLibraryModal.setAttribute("aria-hidden", "false");
+
+    await loadLibraryTab("songs");
 }
 
 function closeAudioLibrary() {
 
-    libraryState.open =
-        false;
+    libraryState.open = false;
 
+    libraryState.requestGeneration += 1;
 
     audioLibraryModal.classList.add(
         "hidden"
@@ -1029,6 +1044,60 @@ function closeAudioLibrary() {
 
 
     loadButton.focus();
+}
+
+async function confirmDeleteRecording(song) {
+    if (deleteRecordingDialog.open) return;
+
+    deleteRecordingName.textContent = song.name;
+    deleteRecordingDialog.returnValue = "cancel";
+
+    const confirmed = await new Promise(resolve => {
+        deleteRecordingDialog.addEventListener(
+            "close",
+            () => resolve(deleteRecordingDialog.returnValue === "delete"),
+            { once: true }
+        );
+
+        deleteRecordingDialog.showModal();
+    });
+
+    if (!confirmed) return;
+
+    try {
+        audioLibraryStatus.classList.remove("error");
+        audioLibraryStatus.textContent = `Deleting ${song.name}...`;
+
+        // Stop playback before deleting a currently loaded recording.
+        if (state.audioPath === song.wav_path) {
+            await clearAudioSource();
+
+            state.audioPath = null;
+            state.uploadedFileName = null;
+            state.audioName = null;
+            state.chords = [];
+            state.timeline = [];
+            state.analysisDuration = 0;
+            state.displayedChordIndex = null;
+
+            songName.textContent = "No song loaded";
+            emptyState.textContent = "Load a song or recording to begin.";
+            chordDisplay.classList.add("hidden");
+            emptyState.classList.remove("hidden");
+
+            updatePlayerUI();
+        }
+
+        await invoke("delete_recording", { id: song.id });
+
+        await loadLibraryTab("recordings");
+
+    } catch (error) {
+        console.error("Delete recording failed:", error);
+        audioLibraryStatus.classList.add("error");
+        audioLibraryStatus.textContent =
+            `Could not delete ${song.name}: ${error}`;
+    }
 }
 
 async function clearAudioSource() {
@@ -1428,16 +1497,43 @@ async function loadSelectedLibrarySong() {
     updateControls();
     audioLibraryStatus.textContent = `Loading ${song.name}...`;
     try {
+        const isRecording = libraryState.tab === "recordings";
+
         await applyLoadedAudio({
-            name:
-                song.name,
-
-            localPath:
-                null,
-
-            uploadedFileName:
-                song.name
+            name: song.name,
+            localPath: isRecording ? song.wav_path : null,
+            uploadedFileName: isRecording ? null : song.name
         });
+
+        if (isRecording) {
+            state.chords = song.chords ?? [];
+            state.analysisDuration = song.duration ?? 0;
+            state.timeline = buildChordTimeline(
+                state.chords,
+                getDuration()
+            );
+            state.displayedChordIndex = null;
+
+            updateCapoRecommendation();
+
+            if (state.chords.length) {
+                emptyState.classList.add("hidden");
+                chordDisplay.classList.remove("hidden");
+
+                status.textContent =
+                    `${song.name} loaded with saved chord analysis.`;
+                updateChordDisplay();
+            } else {
+                chordDisplay.classList.add("hidden");
+                emptyState.textContent =
+                    "Recording loaded. Press Analyze to detect chords.";
+                emptyState.classList.remove("hidden");
+
+                status.textContent = `${song.name} loaded.`;
+            }
+
+            updatePlayerUI();
+        }
 
 
         closeAudioLibrary();
@@ -1887,8 +1983,7 @@ export async function loadRecordedAnalysis(result) {
     state.audioPath = null;
     state.uploadedFileName = null;
 
-    state.audioName =
-        "Recorded Session";
+    state.audioName = result.recording_name ?? "Recorded Session";
 
     state.chords =
         result.chords ?? [];
@@ -1902,8 +1997,7 @@ export async function loadRecordedAnalysis(result) {
     state.displayedChordIndex = null;
 
 
-    songName.textContent =
-        "Recorded Session";
+    songName.textContent = displayTrackName(state.audioName);
 
 
     if (state.chords.length) {
@@ -1994,16 +2088,19 @@ document.addEventListener(
             return;
         }
 
+        if (deleteRecordingDialog.open) {
+            if (event.key.toLowerCase() === "m") {
+                event.stopPropagation();
+            }
+            return;
+        }
 
         /*
          * Prevent the normal M shortcut
          * from switching modes while the
          * library is open.
          */
-        if (
-            event.key
-                .toLowerCase() === "m"
-        ) {
+        if (event.key.toLowerCase() === "m") {
 
             event.stopPropagation();
 
@@ -2011,10 +2108,7 @@ document.addEventListener(
         }
 
 
-        if (
-            event.key ===
-            "ArrowDown"
-        ) {
+        if (event.key === "ArrowDown") {
 
             event.preventDefault();
             event.stopPropagation();
@@ -2029,10 +2123,7 @@ document.addEventListener(
         }
 
 
-        if (
-            event.key ===
-            "ArrowUp"
-        ) {
+        if (event.key === "ArrowUp") {
 
             event.preventDefault();
             event.stopPropagation();
@@ -2048,8 +2139,7 @@ document.addEventListener(
 
 
         if (
-            event.key ===
-            "Escape"
+            event.key === "Escape"
         ) {
 
             event.preventDefault();
@@ -2062,35 +2152,23 @@ document.addEventListener(
         }
 
 
-        if (
-            event.key ===
-            "Enter"
-        ) {
-
-            /*
-             * Let normal footer buttons
-             * keep their normal Enter
-             * behavior.
-             */
+        if (event.key === "Enter") {
             if (
-                document.activeElement ===
-                    browseLocalAudioButton ||
-                document.activeElement ===
-                    closeAudioLibraryButton ||
-                document.activeElement ===
-                    cancelAudioLibraryButton ||
-                document.activeElement ===
-                    loadLibrarySongButton
+                document.activeElement === browseLocalAudioButton ||
+                document.activeElement === closeAudioLibraryButton ||
+                document.activeElement === cancelAudioLibraryButton ||
+                document.activeElement === loadLibrarySongButton ||
+                document.activeElement === uploadedSongsTab ||
+                document.activeElement === recordingsTab ||
+                document.activeElement?.classList.contains("audio-library-delete")
             ) {
                 return;
             }
 
-
             event.preventDefault();
             event.stopPropagation();
 
-
-            loadSelectedLibrarySong();
+            void loadSelectedLibrarySong();
         }
 
     },
@@ -2114,6 +2192,13 @@ loadLibrarySongButton.addEventListener(
     loadSelectedLibrarySong
 );
 
+uploadedSongsTab.addEventListener("click", () => {
+    void loadLibraryTab("songs");
+});
+
+recordingsTab.addEventListener("click", () => {
+    void loadLibraryTab("recordings");
+});
 
 browseLocalAudioButton.addEventListener(
     "click",

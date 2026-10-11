@@ -1640,3 +1640,91 @@ body {
     .app.focused-playing .player { flex-wrap: wrap; }
     .app.focused-playing .timeline { flex-basis: 190px; }
 }
+
+/* Library tabs */
+.audio-library-tabs {
+    display: flex;
+    gap: 8px;
+    margin-top: 20px;
+}
+
+.library-tab {
+    flex: 1;
+    padding: 12px 16px;
+    border: 1.5px solid #111;
+    border-radius: 10px;
+    background: transparent;
+    color: #111;
+    font-weight: 750;
+    cursor: pointer;
+}
+
+.library-tab.active {
+    background: #111;
+    color: #f5ede0;
+}
+
+/* Recording rows and delete buttons */
+.audio-library-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.audio-library-item .audio-library-song {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+}
+
+.audio-library-delete {
+    flex: 0 0 auto;
+    padding: 10px 12px;
+    border: 1.5px solid #b83c3c;
+    border-radius: 9px;
+    background: transparent;
+    color: #a32828;
+    font-weight: 750;
+    cursor: pointer;
+}
+
+.audio-library-delete:hover {
+    background: #f7dddd;
+}
+
+/* Recording deletion confirmation */
+.delete-recording-dialog {
+    width: min(90vw, 420px);
+    padding: 26px;
+    border: 2px solid #111;
+    border-radius: 18px;
+    background: #f5ede0;
+    color: #111;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+
+.delete-recording-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.delete-recording-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 24px;
+}
+
+.delete-recording-actions button {
+    padding: 10px 16px;
+    border: 1px solid #111;
+    border-radius: 9px;
+    background: transparent;
+    cursor: pointer;
+}
+
+.delete-recording-actions .delete-confirm-button {
+    background: #a32828;
+    color: white;
+    border-color: #a32828;
+}
