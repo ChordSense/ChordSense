@@ -50,6 +50,7 @@ class PlaybackSpeedController:
         self.iod = iod
         self.cache_dir = Path(cache_dir)
         self._lock = threading.RLock()
+        self._render_lock = threading.Lock()
         self._source_path: Path | None = None
         self._duration: float | None = None
         self._speed = DEFAULT_SPEED
@@ -85,9 +86,10 @@ class PlaybackSpeedController:
             subprocess.run(
                 [
                     "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                    "-threads", "1", "-filter_threads", "1",
                     "-i", str(source), "-map", "0:a:0", "-vn",
                     "-af", f"atempo={speed:.4f}",
-                    "-c:a", "libmp3lame", "-q:a", "4", "-threads", "2",
+                    "-c:a", "libmp3lame", "-q:a", "4", "-threads", "1",
                     str(temporary),
                 ],
                 capture_output=True,
@@ -154,14 +156,20 @@ class PlaybackSpeedController:
         with self._lock:
             if self._source_path is None:
                 raise PlaybackSpeedError("Load a song before changing playback speed")
-            if speed == self._speed:
-                return self.status()
-            source = self._source_path
             self._generation += 1
             generation = self._generation
+            if speed == self._speed:
+                # Selecting the current tempo also cancels a pending change.
+                return self.status()
+            source = self._source_path
 
-        # Keep the existing track running while a new tempo is rendered.
-        target = self._prepare_variant(source, speed)
+        # Keep playback/control responsive, but permit only one FFmpeg render.
+        # Requests superseded while waiting never start another conversion.
+        with self._render_lock:
+            with self._lock:
+                if generation != self._generation:
+                    return self.status()
+            target = self._prepare_variant(source, speed)
 
         with self._lock:
             if generation != self._generation:

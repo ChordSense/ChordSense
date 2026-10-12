@@ -1,0 +1,17 @@
+[Unit]
+Description=ChordSense device HTTP API
+After=network.target avahi-daemon.service chordsense-iod.service
+Wants=avahi-daemon.service chordsense-iod.service
+
+[Service]
+Type=simple
+User=chordsense
+Group=chordsense
+WorkingDirectory=/home/chordsense/workspace/ChordSense/backend
+EnvironmentFile=/etc/chordsense/api.env
+ExecStart=/home/chordsense/workspace/ChordSense/backend/.venv/bin/python serve.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

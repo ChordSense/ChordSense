@@ -1,5 +1,7 @@
 import math
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -157,6 +159,57 @@ class PlaybackSpeedTests(unittest.TestCase):
         self.assertEqual(original_position(30.0, 0.5, 120.0), 15.0)
         self.assertEqual(original_position(260.0, 0.5, 120.0), 120.0)
         self.assertEqual(original_position(-2.0, 0.5, 120.0), 0.0)
+
+    def test_concurrent_speed_requests_render_serially_and_only_apply_latest(self):
+        entered, release = threading.Event(), threading.Event()
+        active = 0
+        peak = 0
+        errors = []
+
+        def render(*_args):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            entered.set()
+            release.wait(2)
+            active -= 1
+            return self.variant
+
+        def change(speed):
+            try:
+                self.controller.set_speed(speed)
+            except Exception as exc:
+                errors.append(exc)
+
+        with patch.object(self.controller, "_prepare_variant", side_effect=render), \
+             patch.object(self.controller, "_prune_cache"):
+            first = threading.Thread(target=change, args=(0.5,))
+            first.start()
+            self.assertTrue(entered.wait(1))
+            second = threading.Thread(target=change, args=(0.75,))
+            second.start()
+            until = time.monotonic() + 1
+            while self.controller._generation < 3 and time.monotonic() < until:
+                time.sleep(0.005)
+            release.set()
+            first.join(2)
+            second.join(2)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(peak, 1)
+        self.assertEqual(self.controller.status()["speed"], 0.75)
+        self.assertEqual(len([call for call in self.iod.calls if call[0] == "load"]), 2)
+
+    def test_selecting_current_speed_cancels_pending_render(self):
+        def cancel_pending(*_args):
+            self.controller.set_speed(1.0)
+            return self.variant
+
+        with patch.object(self.controller, "_prepare_variant", side_effect=cancel_pending):
+            result = self.controller.set_speed(0.5)
+        self.assertEqual(result["speed"], 1.0)
+        self.assertEqual(len(self.iod.calls), 1)
 
 
 class PlaybackSpeedRouteTests(unittest.TestCase):

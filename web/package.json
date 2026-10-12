@@ -1,0 +1,11 @@
+{
+  "name": "chordsense-companion-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "python3 -m http.server 5173 --bind 127.0.0.1 --directory src",
+    "build": "node scripts/build.mjs",
+    "test": "node --test src/*.test.js"
+  }
+}

@@ -7,8 +7,8 @@ object per line out. See ``iod/src/protocol.rs`` for the command list.
 
 The backend uses this for Record mode: ``begin_recording`` attaches a capture
 sink (``start_capture``) and ``end_recording`` detaches it and gets back a WAV
-path (``stop_capture``). The sampler itself runs continuously inside ``iod``
-regardless of recording state.
+path (``stop_capture``). The sampler sleeps when idle and acquires samples
+while a recording or live-stream subscriber is active.
 
 Playback also goes through ``iod``: it plays the backing track / recorded take
 out of the PCM5102A DAC (I2S) to the pedal's headphone jack. The ``/playback/*``
