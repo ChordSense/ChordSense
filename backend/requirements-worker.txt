@@ -1,0 +1,4 @@
+# HTTP wrapper only. Install model requirements into the separate model venv.
+Flask==3.0.3
+Werkzeug==3.0.3
+waitress==3.0.2

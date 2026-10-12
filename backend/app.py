@@ -1,26 +1,30 @@
+"""ChordSense device API: hardware control and cached/offloaded analysis."""
+
 import atexit
+import errno
 import json
 import math
 import os
-import subprocess
+import shutil
 import tempfile
 import threading
+import time
+import uuid
 from contextlib import closing
 from pathlib import Path
-import time
+from urllib.parse import urlsplit
 
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Request, Response, current_app, jsonify, request
 from werkzeug.utils import secure_filename
 
+from analysis_cache import identify_audio, load_cache_entry, save_cache_entry
+from analysis_jobs import AnalysisJobs, AnalysisQueueFull
+from device_access import install_device_access, is_local_desktop_request, pairing_manager
 from iod_client import IodClient, IodError
+from offline_model import ALLOWED_CHORD_DICTIONARIES, parse_lab_file, run_local_model
 from playback_speed import PlaybackSpeedController, PlaybackSpeedError
-from web_upload import ALLOWED_AUDIO_EXTENSIONS, UPLOADS_DIR, web_upload
-
-from analysis_cache import (
-    identify_audio,
-    load_cache_entry,
-    save_cache_entry,
-)
+from pairing import PairingError
+from web_upload import ALLOWED_AUDIO_EXTENSIONS, resolve_upload_path, web_upload
 
 from recordings_library import (
     list_recordings as get_saved_recordings,
@@ -29,44 +33,46 @@ from recordings_library import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-# Original: MODEL_REPO = BASE_DIR / "model_repo"
 MODEL_REPO = BASE_DIR / "models" / "chord-cnn-lstm-model"
-DEFAULT_CUSTOM_MODEL_HEF = (
-    BASE_DIR / "models" / "chordsense_cnn" / "checkpoints" / "chordsense.hef"
-)
-CUSTOM_MODEL_HEF = Path(
-    os.environ.get(
-        "CHORDSENSE_HEF",
-        str(DEFAULT_CUSTOM_MODEL_HEF),
-    )
-)
+DEFAULT_CUSTOM_MODEL_HEF = BASE_DIR / "models/chordsense_cnn/checkpoints/chordsense.hef"
+CUSTOM_MODEL_HEF = Path(os.environ.get("CHORDSENSE_HEF", str(DEFAULT_CUSTOM_MODEL_HEF)))
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
 INPUTS_DIR = RUNTIME_DIR / "inputs"
 OUTPUTS_DIR = RUNTIME_DIR / "outputs"
+for directory in (RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR):
+    directory.mkdir(parents=True, exist_ok=True)
 
-for d in [RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
+class DeviceRequest(Request):
+    @property
+    def max_content_length(self):
+        if request.path == "/api/pairing/claim":
+            return 1024
+        if is_local_desktop_request():
+            return current_app.config["MAX_CONTENT_LENGTH"]
+        return current_app.config["COMPANION_MAX_CONTENT_LENGTH"]
 
-app = Flask(__name__)
+
+app = Flask(__name__, static_folder=None)
+app.request_class = DeviceRequest
 app.register_blueprint(web_upload)
+app.config["COMPANION_MAX_CONTENT_LENGTH"] = int(os.environ.get("CHORDSENSE_MAX_UPLOAD_MB", "95")) * 1024 * 1024
+# Keep the native app's existing 300 MiB request limit. Only companion uploads
+# need the smaller tunnel-compatible cap; Flask applies it per request above.
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
+install_device_access(app)
 
 iod = IodClient()
 playback = PlaybackSpeedController(iod, RUNTIME_DIR / "playback-speed-cache")
+analysis_jobs = AnalysisJobs()
+# Synchronous desktop requests share the compute limit with queued jobs.
+analysis_execution_lock = threading.Lock()
 live_feedback_session = None
-live_feedback_session_lock = threading.Lock()
+live_feedback_session_lock = threading.RLock()
 
 
 def create_recording_recognizer():
-    from models.chordsense_cnn.chord_recognition import (
-        HailoChordRecognizer,
-        OFFLINE_POSTPROCESSING,
-    )
-
-    return HailoChordRecognizer(
-        CUSTOM_MODEL_HEF,
-        postprocessing=OFFLINE_POSTPROCESSING,
-    )
+    from models.chordsense_cnn.chord_recognition import HailoChordRecognizer, OFFLINE_POSTPROCESSING
+    return HailoChordRecognizer(CUSTOM_MODEL_HEF, postprocessing=OFFLINE_POSTPROCESSING)
 
 
 def get_live_feedback_session():
@@ -74,7 +80,6 @@ def get_live_feedback_session():
     with live_feedback_session_lock:
         if live_feedback_session is None:
             from live_feedback_session import LiveFeedbackSession
-
             live_feedback_session = LiveFeedbackSession(iod=iod)
     return live_feedback_session
 
@@ -85,321 +90,250 @@ def close_live_feedback_session():
         live_feedback_session.stop()
 
 
-def parse_lab_file(lab_path: Path):
-    results = []
-    with lab_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(maxsplit=2)
-            if len(parts) != 3:
-                continue
-            start, end, chord = parts
-            results.append({
-                "start": float(start),
-                "end": float(end),
-                "chord": chord,
-                "confidence": 1.0,
-            })
-    return results
+def _remote_analysis_enabled():
+    return bool(os.environ.get("CHORDSENSE_ANALYSIS_URL", "").strip())
+
+
+def _write_lab(chords: list[dict], path: Path):
+    with path.open("w", encoding="utf-8") as lab:
+        for chord in chords:
+            lab.write(f"{chord['start']} {chord['end']} {chord['chord']}\n")
 
 
 def run_model(audio_path: Path, output_lab_path: Path, chord_dict: str):
-    script_path = MODEL_REPO / "chord_recognition.py"
+    """Select an external worker explicitly, without a costly local fallback."""
+    if _remote_analysis_enabled():
+        from remote_analysis import analyze_remotely
+        result = analyze_remotely(audio_path, chord_dict)
+        _write_lab(result["chords"], output_lab_path)
+        return "", "", result
+    stdout, stderr = run_local_model(audio_path, output_lab_path, chord_dict, model_repo=MODEL_REPO)
+    return stdout, stderr, None
 
-    if os.name == "nt":
-        venv_python = MODEL_REPO / "venv" / "Scripts" / "python.exe"
-    else:
-        venv_python = MODEL_REPO / "venv" / "bin" / "python"
 
-    if not script_path.exists():
-        raise RuntimeError(f"Missing model script: {script_path}")
-    if not venv_python.exists():
-        raise RuntimeError(f"Missing model venv python: {venv_python}")
+def _chord_dictionary(value):
+    if not isinstance(value, str):
+        raise ValueError("chord_dict must be a string")
+    value = value.strip() or "submission"
+    if value not in ALLOWED_CHORD_DICTIONARIES:
+        raise ValueError("Unsupported chord dictionary")
+    return value
 
-    cmd = [
-        str(venv_python),
-        str(script_path),
-        str(audio_path),
-        str(output_lab_path),
-        chord_dict,
-    ]
 
-    proc = subprocess.run(
-        cmd,
-        cwd=str(MODEL_REPO),
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-    )
+def _snapshot_uploaded_audio(source: Path) -> Path:
+    """Keep this inode alive when the companion replaces its library name."""
+    snapshot = INPUTS_DIR / f"stored-{uuid.uuid4().hex}{source.suffix}"
+    try:
+        os.link(source, snapshot)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        # A separately mounted inputs directory cannot share an inode. Open
+        # the source once so deletion/replacement cannot switch bytes mid-copy.
+        try:
+            with source.open("rb") as audio, snapshot.open("xb") as output:
+                shutil.copyfileobj(audio, output, length=64 * 1024)
+        except Exception:
+            snapshot.unlink(missing_ok=True)
+            raise
+    return snapshot
 
-    if proc.returncode != 0:
-        raise RuntimeError(
-            "Model inference failed.\n\n"
-            f"STDOUT:\n{proc.stdout}\n\n"
-            f"STDERR:\n{proc.stderr}"
-        )
 
-    if not output_lab_path.exists():
-        raise RuntimeError("Model finished but did not create the .lab output file.")
+def analyze_source(audio_path: Path, original_name: str, chord_dict: str) -> dict:
+    """Analyze a stored source once and reuse the persistent content cache."""
+    with analysis_execution_lock:
+        cache_key, audio_sha256 = identify_audio(audio_path, chord_dict)
+        cached = load_cache_entry(cache_key)
+        if cached is not None:
+            chords = parse_lab_file(cached.lab_path)
+            return {
+                "success": True, "chords": chords, "total_chords": len(chords),
+                "duration": cached.metadata.get("duration", chords[-1]["end"] if chords else 0.0),
+                "model_used": cached.metadata.get("model_used", "chord-cnn-lstm"),
+                "model_name": cached.metadata.get("model_name", "Chord-CNN-LSTM"),
+                "chord_dict": chord_dict, "processing_time": 0.0,
+                "stdout": "", "stderr": "", "lab_file": str(cached.lab_path),
+                "cached": True, "cache_key": cache_key,
+            }
+        with tempfile.NamedTemporaryFile(dir=OUTPUTS_DIR, suffix=".lab", delete=False) as temp:
+            output_lab_path = Path(temp.name)
+        try:
+            started = time.perf_counter()
+            stdout, stderr, remote_result = run_model(audio_path, output_lab_path, chord_dict)
+            chords = remote_result["chords"] if remote_result else parse_lab_file(output_lab_path)
+            duration = remote_result["duration"] if remote_result else (chords[-1]["end"] if chords else 0.0)
+            model_used = remote_result["model_used"] if remote_result else "chord-cnn-lstm"
+            model_name = remote_result["model_name"] if remote_result else "Chord-CNN-LSTM"
+            entry = save_cache_entry(
+                cache_key=cache_key, audio_sha256=audio_sha256, original_name=original_name,
+                chord_dict=chord_dict, source_lab_path=output_lab_path, duration=duration,
+                total_chords=len(chords), model_used=model_used, model_name=model_name,
+            )
+            return {
+                "success": True, "chords": chords, "total_chords": len(chords),
+                "duration": duration, "model_used": model_used, "model_name": model_name,
+                "chord_dict": chord_dict, "processing_time": time.perf_counter() - started,
+                "stdout": stdout, "stderr": stderr, "lab_file": str(entry.lab_path),
+                "cached": False, "cache_key": cache_key,
+            }
+        finally:
+            output_lab_path.unlink(missing_ok=True)
 
-    return proc.stdout, proc.stderr
+
+def _run_analysis_request(work, cleanup=None, overflow_result=None):
+    def run():
+        try:
+            return work()
+        except Exception as exc:
+            return {"success": False, "error": str(exc) or type(exc).__name__}
+        finally:
+            if cleanup is not None:
+                cleanup()
+
+    if request.args.get("async") == "1":
+        try:
+            job_id = analysis_jobs.submit(run)
+        except AnalysisQueueFull as exc:
+            if cleanup is not None:
+                cleanup()
+            response = jsonify({"success": False, "error": str(exc), **(overflow_result or {})})
+            response.headers["Retry-After"] = "5"
+            return response, 503
+        return jsonify({"success": True, "job_id": job_id, "status_url": f"/api/jobs/{job_id}"}), 202
+    result = run()
+    return jsonify(result), 200 if result.get("success") else 500
+
+
+@app.errorhandler(413)
+def upload_too_large(_error):
+    if request.path == "/api/pairing/claim":
+        return jsonify({"success": False, "error": "Pairing request is too large.", "error_code": "invalid_request"}), 413
+    return jsonify({"success": False, "error": "Audio exceeds the configured upload limit."}), 413
+
+
+@app.before_request
+def validate_json_body():
+    if request.is_json and not isinstance(request.get_json(silent=True), dict):
+        return jsonify({"success": False, "error": "JSON request body must be an object."}), 400
+
+
+def _companion_website_url():
+    value = os.environ.get("CHORDSENSE_COMPANION_URL", "").strip()
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
+                or parsed.password is not None or "?" in value or "#" in value
+                or any(character.isspace() or ord(character) < 32 for character in value)):
+            return ""
+        parsed.port  # Reject malformed ports before showing the address.
+    except ValueError:
+        return ""
+    return value
+
+
+def _native_pairing_response(result):
+    return jsonify({"success": True, **result, "website_url": _companion_website_url()})
+
+
+@app.errorhandler(PairingError)
+def pairing_failed(error):
+    return jsonify({"success": False, "error": str(error), "error_code": error.code}), error.status
+
+
+@app.post("/api/pairing/start")
+def start_upload_pairing():
+    return _native_pairing_response(pairing_manager(app).start())
+
+
+@app.get("/api/pairing/status")
+def upload_pairing_status():
+    return _native_pairing_response(pairing_manager(app).status())
+
+
+@app.post("/api/pairing/cancel")
+def cancel_upload_pairing():
+    return _native_pairing_response(pairing_manager(app).cancel())
+
+
+@app.post("/api/pairing/revoke")
+def revoke_upload_sessions():
+    return _native_pairing_response(pairing_manager(app).revoke_all())
+
+
+@app.post("/api/pairing/claim")
+def claim_upload_pairing():
+    body = request.get_json(silent=True) or {}
+    return jsonify({"success": True, **pairing_manager(app).claim(body.get("code"), request.headers.get("Origin"))})
+
+
+@app.post("/api/pairing/logout")
+def logout_upload_session():
+    authorization = request.headers.get("Authorization", "")
+    pairing_manager(app).logout(authorization[7:], request.headers.get("Origin"))
+    return jsonify({"success": True})
 
 
 @app.get("/health")
 def health():
     return jsonify({
-        "success": True,
-        "message": "ChordSenseOfficial backend running",
-        "model_repo": str(MODEL_REPO),
-        "record_model_backend": "hailo",
-        "record_model_hef": str(CUSTOM_MODEL_HEF),
+        "success": True, "message": "ChordSense device API running",
+        "analysis_backend": "remote" if _remote_analysis_enabled() else "local",
+        "record_model_backend": "remote" if _remote_analysis_enabled() else "hailo",
+        "max_upload_bytes": request.max_content_length,
+        "capabilities": {"companion_uploads": True, "local_analysis": True, "local_live_feedback": True, "local_device_playback": True},
     })
+
+
+@app.get("/api/jobs/<job_id>")
+def analysis_job_status(job_id):
+    status = analysis_jobs.status(job_id)
+    if status is None:
+        return jsonify({"success": False, "error": "Analysis job not found or expired."}), 404
+    return jsonify({"success": True, "job_id": job_id, **status})
 
 
 @app.post("/analyze")
 def analyze():
-
-    print(
-        "=== /analyze request received ===",
-        flush=True
-    )
-
-    if "file" not in request.files:
-
-        return jsonify({
-            "success": False,
-            "error": "No file uploaded"
-        }), 400
-
-
-    file = request.files["file"]
-
-    if not file.filename:
-
-        return jsonify({
-            "success": False,
-            "error": "Empty filename"
-        }), 400
-
-
-    chord_dict = (
-        request.form.get(
-            "chord_dict",
-            "submission"
-        ).strip()
-        or
-        "submission"
-    )
-
-
-    safe_name = (
-        secure_filename(
-            file.filename
-        )
-        or
-        "audio.wav"
-    )
-
-    suffix = (
-        Path(safe_name).suffix
-        or
-        ".wav"
-    )
-
-    input_path = None
-    output_lab_path = None
-
+    audio_file = request.files.get("file")
+    if audio_file is None or not audio_file.filename:
+        return jsonify({"success": False, "error": "No file uploaded"}), 400
+    safe_name = secure_filename(audio_file.filename)
+    if Path(safe_name).suffix.lower() not in ALLOWED_AUDIO_EXTENSIONS:
+        return jsonify({"success": False, "error": "Unsupported audio type."}), 400
     try:
-
-        # Save incoming audio temporarily.
-        with tempfile.NamedTemporaryFile(
-            dir=INPUTS_DIR,
-            suffix=suffix,
-            prefix="audio_",
-            delete=False,
-        ) as tmp_in:
-
-            input_path = Path(tmp_in.name)
-
-        file.save(str(input_path))
-        print(
-            f"Uploaded file: {file.filename}",
-            flush=True
-        )
+        chord_dict = _chord_dictionary(request.form.get("chord_dict", "submission"))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    with tempfile.NamedTemporaryFile(dir=INPUTS_DIR, suffix=Path(safe_name).suffix, delete=False) as temp:
+        input_path = Path(temp.name)
+    try:
+        audio_file.save(input_path)
+    except Exception:
+        input_path.unlink(missing_ok=True)
+        raise
+    return _run_analysis_request(
+        lambda: analyze_source(input_path, safe_name, chord_dict),
+        cleanup=lambda: input_path.unlink(missing_ok=True),
+    )
 
 
-        # --------------------------------
-        # CACHE LOOKUP
-        # --------------------------------
-
-        (
-            cache_key,
-            audio_sha256
-        ) = identify_audio(
-            input_path,
-            chord_dict
-        )
-        cached_entry = (load_cache_entry(cache_key))
-        if cached_entry is not None:
-
-            print(
-                f"Analysis cache hit: "
-                f"{cache_key}",
-                flush=True
-            )
-            chords = parse_lab_file(cached_entry.lab_path)
-            duration = (
-                cached_entry.metadata.get(
-                    "duration"
-                )
-                or
-                (
-                    chords[-1]["end"]
-                    if chords
-                    else 0.0
-                )
-            )
-
-
-            return jsonify({
-
-                "success": True,
-
-                "chords":chords,
-
-                "total_chords":len(chords),
-
-                "duration":duration,
-
-                "model_used":
-                    cached_entry.metadata.get(
-                        "model_used",
-                        "chord-cnn-lstm"
-                    ),
-
-                "model_name":
-                    cached_entry.metadata.get(
-                        "model_name",
-                        "Chord-CNN-LSTM"
-                    ),
-
-                "chord_dict":chord_dict,
-
-                "processing_time":0.0,
-
-                "stdout":"",
-
-                "stderr":"",
-
-                "lab_file":str(cached_entry.lab_path),
-
-                "cached":True,
-
-                "cache_key":cache_key,
-            })
-
-
-        # --------------------------------
-        # CACHE MISS — RUN MODEL
-        # --------------------------------
-        print(
-            "No cached analysis found.",
-            flush=True
-        )
-        print(
-            "Starting model inference...",
-            flush=True
-        )
-        output_lab_path = (OUTPUTS_DIR / f"{input_path.stem}.lab")
-        start_time = (time.perf_counter())
-        stdout, stderr = run_model(input_path, output_lab_path, chord_dict)
-
-        processing_time = (time.perf_counter() - start_time)
-
-        chords = parse_lab_file(
-            output_lab_path
-        )
-
-        duration = (
-            chords[-1]["end"]
-            if chords
-            else 0.0
-        )
-
-
-        # --------------------------------
-        # SAVE PERSISTENT CACHE
-        # --------------------------------
-
-        cache_entry = (
-            save_cache_entry(
-
-                cache_key=cache_key,
-
-                audio_sha256=audio_sha256,
-
-                original_name=safe_name,
-
-                chord_dict=chord_dict,
-
-                source_lab_path=output_lab_path,
-
-                duration=duration,
-
-                total_chords=len(chords),
-
-                model_used="chord-cnn-lstm",
-
-                model_name="Chord-CNN-LSTM"
-            )
-        )
-        print(f"Saved analysis cache: "f"{cache_entry.lab_path}",flush=True)
-
-        return jsonify({
-            "success": True,
-            "chords":chords,
-            "total_chords":len(chords),
-            "duration":duration,
-            "model_used":"chord-cnn-lstm",
-            "model_name":"Chord-CNN-LSTM",
-            "chord_dict":chord_dict,
-            "processing_time":processing_time,
-            "stdout":stdout,
-            "stderr":stderr,
-            "lab_file":str(cache_entry.lab_path),
-            "cached":False,
-            "cache_key":cache_key,
-        })
-    except Exception as error:
-
-        print(
-            f"Analyze failed: {error}",
-            flush=True
-        )
-        return jsonify({
-            "success": False,
-            "error": str(error)
-        }), 500
-
-
-    finally:
-        # These files are temporary.
-        # The persistent .lab is already
-        # stored in analysis_cache.
-        if (
-            input_path is not None and
-            input_path.exists()
-        ):
-            input_path.unlink()
-
-
-        if (
-            output_lab_path is not None and
-            output_lab_path.exists()
-        ):
-            output_lab_path.unlink()
+@app.post("/analyze_uploaded")
+def analyze_uploaded():
+    body = request.get_json(silent=True) or {}
+    try:
+        audio_path = resolve_upload_path(body.get("filename"))
+        chord_dict = _chord_dictionary(body.get("chord_dict", "submission"))
+        input_path = _snapshot_uploaded_audio(audio_path)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except OSError as exc:
+        return jsonify({"success": False, "error": f"Unable to prepare stored audio: {exc}"}), 500
+    return _run_analysis_request(
+        lambda: analyze_source(input_path, audio_path.name, chord_dict),
+        cleanup=lambda: input_path.unlink(missing_ok=True),
+    )
 
 @app.get("/api/recordings")
 def recordings_list():
@@ -454,61 +388,55 @@ def begin_recording():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.post("/end_recording")
-def end_recording():
-    print("=== /end_recording request received ===", flush=True)
-    output_lab_path = OUTPUTS_DIR / "temp.lab"
-
+def analyze_recording(wav_path: Path, capture_duration: float) -> dict:
+    output_lab_path = OUTPUTS_DIR / f"recording-{uuid.uuid4().hex}.lab"
     try:
-        print("Detaching iod capture sink...", flush=True)
-        wav_path, capture_duration = iod.stop_capture()
-        print(f"Capture written to {wav_path} ({capture_duration:.2f}s)", flush=True)
-
-        print("Running whole-recording inference on Hailo...", flush=True)
-        # Release the device before live feedback opens its own HEF. Keeping
-        # this recognizer cached pins the only physical Hailo device.
-        with closing(create_recording_recognizer()) as recognizer:
-            result = recognizer.analyze_file(wav_path)
-            if not recognizer.write_lab_file(result, output_lab_path):
-                raise RuntimeError("Chord recognition produced no output")
-        chords = [
-            {
-                "start": segment.start,
-                "end": segment.end,
-                "chord": segment.chord,
-                "confidence": segment.confidence,
-            }
-            for segment in result.segments
-        ]
-        print(f"Hailo inference produced {len(chords)} chord segments.", flush=True)
-
-        saved_recording = save_recording_analysis(
-            wav_path,
-            chords,
-            result.duration_seconds,
-        )
-
-        return jsonify({
-            "success": True,
-            "chords": chords,
-            "total_chords": len(chords),
-            "duration": result.duration_seconds,
-            "model_used": "chordsense-cnn-hef",
-            "model_name": "ChordSenseCNN (Hailo)",
-            "chord_dict": "submission",
-            "processing_time": result.processing_seconds,
-            "stdout": "",
-            "stderr": "",
-            "lab_file": str(output_lab_path),
+        with analysis_execution_lock:
+            if _remote_analysis_enabled():
+                _, _, result = run_model(wav_path, output_lab_path, "submission")
+                chords = result["chords"]
+                duration, processing_time = result["duration"], result["processing_time"]
+                model_used, model_name = result["model_used"], result["model_name"]
+            else:
+                # Do not pin the physical accelerator after a recording finishes.
+                with closing(create_recording_recognizer()) as recognizer:
+                    result = recognizer.analyze_file(wav_path)
+                    if not recognizer.write_lab_file(result, output_lab_path):
+                        raise RuntimeError("Chord recognition produced no output")
+                chords = [
+                    {"start": segment.start, "end": segment.end, "chord": segment.chord, "confidence": segment.confidence}
+                    for segment in result.segments
+                ]
+                duration, processing_time = result.duration_seconds, result.processing_seconds
+                model_used, model_name = "chordsense-cnn-hef", "ChordSenseCNN (Hailo)"
+        saved_recording = save_recording_analysis(wav_path, chords, duration)
+        return {
+            "success": True, "chords": chords, "total_chords": len(chords),
+            "duration": duration, "model_used": model_used, "model_name": model_name,
+            "chord_dict": "submission", "processing_time": processing_time,
+            "stdout": "", "stderr": "", "lab_file": str(output_lab_path),
             "wav_path": str(wav_path),
             "recording_name": saved_recording["name"],
-        })
-    except IodError as e:
-        print(f"End recording failed (iod): {e}", flush=True)
-        return jsonify({"success": False, "error": str(e)}), 502
-    except Exception as e:
-        print(f"End recording failed: {e}", flush=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        }
+    except Exception as exc:
+        output_lab_path.unlink(missing_ok=True)
+        # Preserve the take, including when the remote worker is unavailable.
+        return {"success": False, "error": str(exc), "wav_path": str(wav_path),
+                "duration": capture_duration}
+
+
+@app.post("/end_recording")
+def end_recording():
+    try:
+        wav_path, capture_duration = iod.stop_capture()
+    except IodError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 502
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+    return _run_analysis_request(
+        lambda: analyze_recording(wav_path, capture_duration),
+        overflow_result={"wav_path": str(wav_path), "duration": capture_duration},
+    )
 
 
 @app.post("/feedback/start")
@@ -607,8 +535,12 @@ def _iod_call(action):
 def _resolve_playback_path(body: dict) -> Path:
     """An uploaded song by name (``upload``) or a local file (``path``)."""
     if body.get("upload"):
-        path = UPLOADS_DIR / secure_filename(body["upload"])
+        return resolve_upload_path(body["upload"])
     elif body.get("path"):
+        if not is_local_desktop_request():
+            raise ValueError("Remote playback requires an uploaded filename")
+        if not isinstance(body["path"], str):
+            raise ValueError("path must be a string")
         path = Path(body["path"]).expanduser().resolve()
     else:
         raise ValueError("Provide 'path' or 'upload'")
@@ -623,7 +555,7 @@ def _resolve_playback_path(body: dict) -> Path:
 def playback_load():
     try:
         path = _resolve_playback_path(request.get_json(silent=True) or {})
-    except ValueError as e:
+    except (ValueError, FileNotFoundError) as e:
         return jsonify({"success": False, "error": str(e)}), 400
     return _iod_call(lambda: playback.load(path))
 
@@ -669,8 +601,10 @@ def playback_volume():
     body = request.get_json(silent=True) or {}
     try:
         volume = float(body["volume"])
+        if not math.isfinite(volume) or not 0 <= volume <= 1:
+            raise ValueError("invalid volume")
     except (KeyError, TypeError, ValueError):
-        return jsonify({"success": False, "error": "volume is required"}), 400
+        return jsonify({"success": False, "error": "volume must be finite and from 0 to 1"}), 400
     return _iod_call(lambda: iod.set_volume(volume))
 
 
@@ -680,4 +614,4 @@ def playback_status():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5051, debug=False)
+    app.run(host=os.environ.get("CHORDSENSE_API_HOST", "0.0.0.0"), port=5051, debug=False)

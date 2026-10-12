@@ -1,0 +1,12 @@
+.device-connection { margin: 16px 0; }
+.device-connection-details { border: 1px solid #d4cabd; border-radius: 12px; padding: 12px 16px; background: #faf6ef; }
+.device-connection-details summary { cursor: pointer; font-weight: 600; }
+#device-connection-state { color: #746f67; font-size: 0.85em; margin-left: 12px; }
+#device-connection-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 16px; }
+#device-connection-form[hidden] { display: none; }
+#device-connection-form label { display: grid; gap: 6px; flex: 1 1 240px; font-size: 14px; }
+#device-connection-form input { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #d4cabd; border-radius: 6px; font: inherit; background: white; }
+#device-connection-form button, #device-disconnect { padding: 10px 20px; cursor: pointer; border: 0; border-radius: 6px; background: #111; color: #faf6ef; font: inherit; }
+#device-disconnect { margin-top: 16px; }
+.device-connection-help { flex-basis: 100%; font-size: 13px; color: #746f67; margin: 0; line-height: 1.4; }
+#device-connection-message { font-size: 14px; margin-bottom: 0; }

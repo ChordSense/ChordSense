@@ -12,6 +12,8 @@ backend/models/*/pyrightconfig.json
 
 # Rust
 target/
+web/dist/
+.vercel/
 
 # Runtime / generated outputs
 runtime/
@@ -44,3 +46,5 @@ artifacts/
 
 
 PCB/chordsense_afe/.history/
+.vercel
+.env*

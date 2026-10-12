@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import uuid
+import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Blueprint, jsonify, render_template, request, send_from_directory
+from flask import Blueprint, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
@@ -14,12 +16,8 @@ RUNTIME_DIR = BASE_DIR.parent / "runtime"
 UPLOADS_DIR = RUNTIME_DIR / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-web_upload = Blueprint(
-    "web_upload",
-    __name__,
-    template_folder="templates",
-    static_folder="static",
-)
+web_upload = Blueprint("web_upload", __name__)
+_upload_commit_lock = threading.Lock()
 
 
 def _is_allowed_audio(filename: str) -> bool:
@@ -34,8 +32,19 @@ def _unique_filename(original_name: str) -> str:
     candidate = f"{stem}{suffix}"
     if not (UPLOADS_DIR / candidate).exists():
         return candidate
+    return f"{stem}-{uuid.uuid4().hex[:12]}{suffix}"
 
-    return f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
+
+def resolve_upload_path(filename: str) -> Path:
+    """Resolve only a single library filename, never a caller-provided path."""
+    if not isinstance(filename, str) or not filename or secure_filename(filename) != filename:
+        raise ValueError("Invalid filename.")
+    path = UPLOADS_DIR / filename
+    if path.resolve().parent != UPLOADS_DIR.resolve():
+        raise ValueError("Invalid filename.")
+    if not path.is_file() or not _is_allowed_audio(path.name):
+        raise FileNotFoundError("Audio file not found.")
+    return path
 
 
 def _serialize_audio_file(path: Path) -> dict:
@@ -48,17 +57,12 @@ def _serialize_audio_file(path: Path) -> dict:
     }
 
 
-@web_upload.get("/upload")
-def upload_page():
-    return render_template("upload.html")
-
-
 @web_upload.get("/api/uploads")
 def list_uploads():
     files = [
         _serialize_audio_file(path)
         for path in UPLOADS_DIR.iterdir()
-        if path.is_file() and _is_allowed_audio(path.name)
+        if path.is_file() and not path.is_symlink() and _is_allowed_audio(path.name)
     ]
     files.sort(key=lambda item: item["modified"], reverse=True)
     return jsonify({"success": True, "files": files})
@@ -79,9 +83,18 @@ def upload_audio():
             "error": "Unsupported audio type. Allowed: WAV, MP3, OGG, FLAC, M4A.",
         }), 400
 
-    stored_name = _unique_filename(audio_file.filename)
-    destination = UPLOADS_DIR / stored_name
-    audio_file.save(destination)
+    with tempfile.NamedTemporaryFile(dir=UPLOADS_DIR, suffix=".upload", delete=False) as temp:
+        temporary = Path(temp.name)
+    try:
+        audio_file.save(temporary)
+        # Commit complete files atomically and prevent simultaneous uploads
+        # with the same name from replacing each other's audio.
+        with _upload_commit_lock:
+            stored_name = _unique_filename(audio_file.filename)
+            destination = UPLOADS_DIR / stored_name
+            temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
     return jsonify({
         "success": True,
@@ -92,26 +105,24 @@ def upload_audio():
 
 @web_upload.get("/api/uploads/<path:filename>")
 def download_audio(filename: str):
-    safe_name = secure_filename(filename)
-    if not safe_name or safe_name != filename:
+    try:
+        path = resolve_upload_path(filename)
+    except ValueError:
         return jsonify({"success": False, "error": "Invalid filename."}), 400
-
-    path = UPLOADS_DIR / safe_name
-    if not path.is_file() or not _is_allowed_audio(path.name):
+    except FileNotFoundError:
         return jsonify({"success": False, "error": "Audio file not found."}), 404
 
-    return send_from_directory(UPLOADS_DIR, safe_name, as_attachment=False)
+    return send_from_directory(UPLOADS_DIR, path.name, as_attachment=False)
 
 
 @web_upload.delete("/api/uploads/<path:filename>")
 def delete_audio(filename: str):
-    safe_name = secure_filename(filename)
-    if not safe_name or safe_name != filename:
+    try:
+        path = resolve_upload_path(filename)
+    except ValueError:
         return jsonify({"success": False, "error": "Invalid filename."}), 400
-
-    path = UPLOADS_DIR / safe_name
-    if not path.is_file() or not _is_allowed_audio(path.name):
+    except FileNotFoundError:
         return jsonify({"success": False, "error": "Audio file not found."}), 404
 
     path.unlink()
-    return jsonify({"success": True, "message": f"Deleted {safe_name}."})
+    return jsonify({"success": True, "message": f"Deleted {path.name}."})

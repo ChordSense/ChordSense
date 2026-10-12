@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent
 
 BACKEND = ROOT / "backend"
 MODEL = BACKEND / "models" / "chord-cnn-lstm-model"
-FRONTEND = ROOT / "frontend-tauri" / "frontend-tauri"
+FRONTEND = ROOT / "device-ui"
 
 BACKEND_REQUIREMENTS = BACKEND / "requirements.txt"
 MODEL_REQUIREMENTS = MODEL / "requirements.txt"
@@ -415,7 +415,7 @@ def open_windows_terminals():
         - Runs python app.py
 
     Frontend:
-        - Opens in frontend-tauri/frontend-tauri/
+        - Opens in device-ui/
         - Waits for Enter
         - Runs npm run tauri dev
     """
@@ -681,7 +681,7 @@ def print_manual_start_commands():
         print()
 
         print("Frontend:")
-        print(r"  cd frontend-tauri\frontend-tauri")
+        print(r"  cd device-ui")
         print(r"  npm run tauri dev")
 
     else:

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "echo 'Static companion website: no packages required'",
+  "buildCommand": "node web/scripts/build.mjs",
+  "outputDirectory": "web/dist",
+  "rewrites": [{ "source": "/upload", "destination": "/index.html" }],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "no-referrer" },
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://chordsense.local:5051 https://chordsense.local:5051 http://localhost:5051 https://localhost:5051 http://127.0.0.1:5051 https://127.0.0.1:5051 http://10.136.137.225:5051 https://10.136.137.225:5051; object-src 'none'; base-uri 'self'; frame-ancestors 'none'" }
+      ]
+    }
+  ]
+}
