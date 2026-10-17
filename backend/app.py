@@ -27,6 +27,8 @@ from pairing import PairingError
 from web_upload import ALLOWED_AUDIO_EXTENSIONS, resolve_upload_path, web_upload
 
 from recordings_library import (
+    RecordingLimitReached,
+    start_recording_capture,
     list_recordings as get_saved_recordings,
     save_recording_analysis,
     delete_recording as remove_saved_recording,
@@ -373,12 +375,14 @@ def begin_recording():
     print("=== /begin_recording request received ===", flush=True)
     try:
         print("Attaching iod capture sink...", flush=True)
-        iod.start_capture()
+        start_recording_capture(iod.start_capture)
         return jsonify({
             "success": True,
             "message": "Recording started",
             "model_used": "chordsense-cnn-hef",
         })
+    except RecordingLimitReached as e:
+        return jsonify({"success": False, "error": str(e)}), 409
     except IodError as e:
         print(f"Begin recording failed: {e}", flush=True)
         status = 409 if "stream" in str(e).lower() else 502

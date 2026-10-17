@@ -207,6 +207,14 @@ const loadButton = document.querySelector("#load-audio");
 const audioLibraryModal = document.querySelector("#audio-library-modal");
 
 const audioLibraryList = document.querySelector("#audio-library-list");
+for (const [id, direction] of [["library-scroll-up", -1], ["library-scroll-down", 1]]) {
+    document.getElementById(id).addEventListener("click", () => {
+        audioLibraryList.scrollBy({
+            top: direction * audioLibraryList.clientHeight * 0.8,
+            behavior: "smooth",
+        });
+    });
+}
 
 const audioLibraryEmpty = document.querySelector("#audio-library-empty");
 

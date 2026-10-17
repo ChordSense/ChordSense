@@ -1151,7 +1151,7 @@ body {
         min(92vw, 680px);
 
     max-height:
-        min(82vh, 680px);
+        92dvh;
 
     overflow: hidden;
 
@@ -1276,10 +1276,15 @@ body {
 
     gap: 6px;
 
-    min-height: 160px;
+    min-height: 0;
+    flex: 1 1 240px;
     max-height: 42vh;
 
     overflow-y: auto;
+    touch-action: pan-y;
+    overscroll-behavior-y: contain;
+    scrollbar-width: auto;
+    scrollbar-gutter: stable;
 
     padding: 4px;
 
@@ -1290,6 +1295,8 @@ body {
 
 
 .audio-library-song {
+    flex-shrink: 0;
+    min-height: 64px;
     display: grid;
 
     grid-template-columns:
@@ -1745,6 +1752,7 @@ body {
 
 /* Recording rows and delete buttons */
 .audio-library-item {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -1757,6 +1765,7 @@ body {
 }
 
 .audio-library-delete {
+    min-height: 48px;
     flex: 0 0 auto;
     padding: 10px 12px;
     border: 1.5px solid #b83c3c;
@@ -1806,4 +1815,43 @@ body {
     background: #a32828;
     color: white;
     border-color: #a32828;
+}
+
+/* Keep controls reachable while the track list scrolls on the touch display. */
+.audio-library-dialog > :not(.audio-library-list) {
+    flex-shrink: 0;
+}
+
+.audio-library-scroll-controls {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.audio-library-scroll-controls button {
+    flex: 1;
+    min-height: 48px;
+    touch-action: manipulation;
+}
+
+.audio-library-list::-webkit-scrollbar {
+    width: 18px;
+}
+
+.audio-library-list::-webkit-scrollbar-thumb {
+    background: #756b5e;
+    border: 3px solid #f5ede0;
+    border-radius: 12px;
+}
+
+.audio-library-close {
+    width: 48px;
+    height: 48px;
+}
+
+@media (max-height: 650px) {
+    .audio-library-dialog { padding: 14px; }
+    .audio-library-eyebrow { display: none; }
+    .audio-library-header h2 { font-size: 28px; }
+    .audio-library-shortcuts { margin-top: 8px; }
 }
