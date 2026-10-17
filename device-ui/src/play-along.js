@@ -1489,7 +1489,6 @@ function updateControls() {
     analyzeButton.disabled = !canAnalyze || state.loading || state.analyzing;
     const needsAnalysis = state.needsAnalysis && !analyzeButton.disabled;
     analyzeButton.classList.toggle("needs-analysis", needsAnalysis);
-    analyzeButton.title = needsAnalysis ? "Analyze this track to detect its chords" : "Analyze audio";
     playPauseButton.disabled = !hasAudio;
     stopButton.disabled = !hasAudio;
     seekSlider.disabled = !hasAudio;
