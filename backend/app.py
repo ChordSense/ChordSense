@@ -27,6 +27,7 @@ from pairing import PairingError
 from web_upload import ALLOWED_AUDIO_EXTENSIONS, resolve_upload_path, web_upload
 
 from recordings_library import (
+    rename_recording,
     RecordingLimitReached,
     start_recording_capture,
     list_recordings as get_saved_recordings,
@@ -369,6 +370,35 @@ def recordings_delete(recording_id):
             "success": False,
             "error": str(error),
         }), 500
+
+@app.post("/api/library/title")
+def rename_library_track():
+    from library_titles import set_title, validate_title, upload_title_key
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify(success=False, error="Expected a title request."), 400
+    try:
+        title = validate_title(payload.get("title"))
+        if payload.get("kind") == "recordings":
+            recording_id = payload.get("id")
+            if type(recording_id) is not int or recording_id < 1:
+                raise ValueError("Invalid recording ID.")
+            title = rename_recording(recording_id, title)
+        elif payload.get("kind") == "songs":
+            from web_upload import _upload_commit_lock
+            with _upload_commit_lock:
+                path = resolve_upload_path(payload.get("filename"))
+                title = set_title(upload_title_key(path), title)
+        else:
+            raise ValueError("Choose a song or recording.")
+        return jsonify(success=True, title=title)
+    except ValueError as error:
+        return jsonify(success=False, error=str(error)), 400
+    except FileNotFoundError as error:
+        return jsonify(success=False, error=str(error)), 404
+    except OSError:
+        return jsonify(success=False, error="Could not save the title. Please try again."), 500
+
 
 @app.post("/begin_recording")
 def begin_recording():

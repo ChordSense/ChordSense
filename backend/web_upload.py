@@ -8,6 +8,7 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
+from library_titles import get_title, upload_title_key
 
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 
@@ -51,6 +52,7 @@ def _serialize_audio_file(path: Path) -> dict:
     stat = path.stat()
     return {
         "name": path.name,
+        "title": get_title(upload_title_key(path), path.name),
         "size": stat.st_size,
         "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
         "download_url": f"/api/uploads/{path.name}",

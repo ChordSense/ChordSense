@@ -146,12 +146,8 @@
                     +
                 </button>
 
-                <span
-                    id="capo-recommendation"
-                    class="capo-recommendation"
-                >
-                    Recommended: —
-                </span>
+                <button id="capo-reset" class="capo-reset" type="button">No Capo</button>
+                <span id="capo-recommendation" class="sr-only" aria-live="polite"></span>
 
                 <button
                     id="capo-use-recommended"
@@ -159,7 +155,7 @@
                     type="button"
                     disabled
                 >
-                    Use
+                    Try fret —
                 </button>
             </div>
 
@@ -452,7 +448,7 @@
             </div>
 
             <div class="audio-library-shortcuts">
-                Swipe to scroll. Tap a track, then tap Load Selected.
+                Swipe to scroll. Tap a track, then choose Load or Rename.
             </div>
 
             <div class="audio-library-scroll-controls" aria-label="Scroll tracks">
@@ -499,6 +495,7 @@
 
                 <div class="audio-library-actions-right">
 
+                    <button id="rename-library-song" class="library-button secondary" type="button" disabled>Rename</button>
                     <button
                         id="cancel-audio-library"
                         class="library-button secondary"
@@ -523,6 +520,21 @@
         </section>
 
     </div>
+
+    <dialog id="rename-track-dialog" class="rename-track-dialog" aria-labelledby="rename-track-title">
+        <form id="rename-track-form">
+            <h2 id="rename-track-title">Rename track</h2>
+            <label for="rename-track-input">Title</label>
+            <input id="rename-track-input" type="text" maxlength="80" required autocomplete="off" enterkeyhint="done" />
+            <p id="rename-track-error" class="rename-track-error" role="alert"></p>
+            <div class="rename-track-actions">
+                <button id="rename-keyboard-toggle" type="button" aria-expanded="false" aria-controls="rename-keyboard">Keyboard</button>
+                <button id="rename-track-cancel" type="button">Cancel</button>
+                <button id="rename-track-save" type="submit">Save</button>
+            </div>
+            <div id="rename-keyboard" class="rename-keyboard hidden" aria-label="Title keyboard"></div>
+        </form>
+    </dialog>
 
     <dialog
         id="delete-recording-dialog"

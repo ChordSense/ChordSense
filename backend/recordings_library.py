@@ -5,6 +5,7 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from library_titles import get_title, set_title
 
 RUNTIME_DIR = Path(__file__).resolve().parent.parent / "runtime"
 CAPTURES_DIR = Path(os.environ.get(
@@ -85,7 +86,7 @@ def _public(item):
     stat = path.stat()
     return {
         "id": item["id"],
-        "name": f"Recording #{item['id']}",
+        "name": get_title(f"recording:{item['id']}", f"Recording #{item['id']}"),
         "wav_path": str(path),
         "size": stat.st_size,
         "modified": datetime.fromtimestamp(
@@ -105,6 +106,16 @@ def list_recordings():
             _public(item)
             for item in sorted(index["recordings"], key=lambda r: r["id"], reverse=True)
         ]
+
+
+def rename_recording(recording_id, title):
+    with _LOCK:
+        index = _read()
+        if _sync(index):
+            _write(index)
+        if not any(item["id"] == recording_id for item in index["recordings"]):
+            raise FileNotFoundError("Recording not found")
+        return set_title(f"recording:{recording_id}", title)
 
 
 def save_recording_analysis(wav_path, chords, duration):

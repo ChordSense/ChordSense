@@ -1855,3 +1855,120 @@ body {
     .audio-library-header h2 { font-size: 28px; }
     .audio-library-shortcuts { margin-top: 8px; }
 }
+
+/* Large touch targets for the attached-screen Library and capo controls. */
+.audio-library-dialog {
+    box-sizing: border-box;
+    width: 95vw;
+    height: 94dvh;
+    max-height: 94dvh;
+    padding: 20px;
+}
+.audio-library-header h2 { font-size: 36px; }
+.audio-library-shortcuts { font-size: 16px; margin: 10px 0; }
+.audio-library-list { max-height: none; flex: 1 1 0; gap: 10px; }
+.audio-library-song { min-height: 80px; padding: 16px 20px; }
+.audio-library-song-name { font-size: 24px; }
+.audio-library-song-size { font-size: 17px; }
+.audio-library-dialog .library-tab,
+.audio-library-dialog .library-button,
+.audio-library-delete,
+.audio-library-close {
+    min-height: 64px;
+    font-size: 20px;
+    padding: 12px 20px;
+    touch-action: manipulation;
+}
+.audio-library-close { min-width: 64px; width: 64px; padding: 0; }
+.audio-library-scroll-controls button { min-height: 64px; }
+.audio-library-actions { flex-wrap: wrap; gap: 12px; }
+.audio-library-actions-right { flex-wrap: wrap; gap: 12px; }
+.audio-library-status { margin: 8px 0; }
+.audio-library-delete { min-width: 100px; }
+
+.capo-controls { flex-wrap: wrap; gap: 12px; }
+.capo-controls .capo-step {
+    width: 64px;
+    height: 64px;
+    font-size: 32px;
+    border-radius: 12px;
+}
+.capo-title { font-size: 21px; }
+.capo-position { font-size: 28px; min-width: 40px; }
+.capo-controls .capo-reset,
+.capo-controls .capo-use-recommended {
+    min-height: 64px;
+    padding: 12px 18px;
+    font-size: 20px;
+    border: 2px solid #111;
+    background: transparent;
+    color: #111;
+    touch-action: manipulation;
+}
+.capo-controls .capo-reset:disabled { opacity: .35; }
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.rename-track-dialog {
+    box-sizing: border-box;
+    width: min(95vw, 1000px);
+    max-height: 94dvh;
+    overflow-y: auto;
+    padding: 24px;
+    border: 2px solid #111;
+    border-radius: 18px;
+    background: #f5ede0;
+    color: #111;
+}
+.rename-track-dialog::backdrop { background: rgb(0 0 0 / .6); }
+.rename-track-dialog h2 { margin: 0 0 12px; font-size: 30px; }
+.rename-track-dialog label { display: block; font-size: 20px; margin-bottom: 8px; }
+.rename-track-dialog input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 64px;
+    padding: 12px;
+    font: inherit;
+    font-size: 24px;
+    border: 2px solid #111;
+    border-radius: 10px;
+}
+.rename-track-error { min-height: 24px; margin: 8px 0; color: #a32828; }
+.rename-track-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.rename-track-dialog button {
+    min-height: 64px;
+    padding: 12px 20px;
+    border: 2px solid #111;
+    border-radius: 10px;
+    background: #f5ede0;
+    color: #111;
+    font: inherit;
+    font-size: 22px;
+    touch-action: manipulation;
+}
+#rename-track-save { background: #111; color: #f5ede0; }
+.rename-keyboard { margin-top: 16px; }
+.rename-keyboard-row { display: flex; justify-content: center; gap: 8px; margin-top: 8px; }
+.rename-keyboard-row button { flex: 1; min-width: 0; padding: 8px 4px; }
+.rename-keyboard-row button[aria-pressed="true"] { background: #111; color: #f5ede0; }
+.rename-track-dialog button:disabled { opacity: .4; }
+@media (max-height: 650px) {
+    .audio-library-dialog { padding: 12px; }
+    .audio-library-header h2 { font-size: 28px; }
+    .audio-library-subtitle, .audio-library-shortcuts { display: none; }
+    .audio-library-tabs { margin-top: 8px; }
+    .rename-track-dialog { padding: 12px; }
+    .rename-track-dialog h2 { font-size: 24px; margin-bottom: 6px; }
+    .rename-track-dialog label { display: none; }
+    .rename-keyboard { margin-top: 8px; }
+    .rename-keyboard-row { gap: 6px; margin-top: 6px; }
+    .rename-keyboard-row button { min-height: 56px; }
+}
