@@ -1972,3 +1972,28 @@ body {
     .rename-keyboard-row { gap: 6px; margin-top: 6px; }
     .rename-keyboard-row button { min-height: 56px; }
 }
+
+
+/* Static emphasis avoids a continuous animation after loading a track. */
+.toolbar #analyze.needs-analysis {
+    background: #24633c;
+    color: #fff;
+    outline: 3px solid #24633c;
+    outline-offset: 3px;
+}
+
+.mode-switcher {
+    display: flex;
+    gap: 12px;
+}
+.mode-switcher .mode-tab {
+    min-height: 68px;
+    min-width: 150px;
+    padding: 14px 24px;
+    font-size: 23px;
+    touch-action: manipulation;
+}
+@media (max-width: 520px) {
+    .mode-switcher { width: 100%; }
+    .mode-switcher .mode-tab { flex: 1; min-width: 0; padding: 14px 16px; }
+}

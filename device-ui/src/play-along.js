@@ -4,6 +4,7 @@ import {
 } from "./capo.js";
 import { FeedbackRater, FeedbackScore } from "./feedback-rating.js";
 import { buildChordTimeline, chordProgressionAt } from "./chord-progression.js";
+import { createLibraryMotion } from "./library-motion.js";
 import { createTrackRenamer } from "./rename-track.js";
 import { LocalPlayback } from "./local-playback.js";
 
@@ -25,6 +26,7 @@ const state = {
 
     loading: false,
     analyzing: false,
+    needsAnalysis: false,
 
     chords: [],
     timeline: [],
@@ -660,6 +662,7 @@ const thenFallback = document.querySelector("#then-fallback");
 const chordTimerProgress = document.querySelector("#chord-timer-progress");
 const chordProgress = document.querySelector("#chord-progress");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const libraryMotion = createLibraryMotion(reducedMotion);
 
 // Map these to physical buttons (TODO)
 const capoDownButton =
@@ -993,6 +996,9 @@ function selectLibrarySong(index) {
 }
 
 async function loadLibraryTab(tab) {
+    const switchingTabs = libraryState.tab !== tab;
+    libraryMotion.cancel(audioLibraryList);
+    libraryMotion.cancel(audioLibraryEmpty);
     libraryState.tab = tab;
     libraryState.songs = [];
     libraryState.selectedIndex = -1;
@@ -1050,6 +1056,9 @@ async function loadLibraryTab(tab) {
             : "";
 
         renderAudioLibrary();
+        if (switchingTabs) {
+            libraryMotion.tab(count ? audioLibraryList : audioLibraryEmpty, tab === "recordings");
+        }
 
         requestAnimationFrame(() => {
             if (libraryState.open) audioLibraryList.focus();
@@ -1073,11 +1082,13 @@ async function openAudioLibrary() {
 
     audioLibraryModal.classList.remove("hidden");
     audioLibraryModal.setAttribute("aria-hidden", "false");
+    libraryMotion.open(audioLibraryModal.querySelector(".audio-library-dialog"));
 
     await loadLibraryTab("songs");
 }
 
 function closeAudioLibrary() {
+    libraryMotion.cancelAll();
 
     libraryState.open = false;
 
@@ -1152,6 +1163,7 @@ async function confirmDeleteRecording(song) {
 }
 
 async function clearAudioSource() {
+    state.needsAnalysis = false;
     resetFeedbackScore();
     resetFocusedView();
     const feedbackStopped = stopFeedback();
@@ -1227,6 +1239,7 @@ async function applyLoadedAudio({
             : { upload: uploadedFileName }
     );
 
+    state.needsAnalysis = true;
     updatePlayerUI();
 }
 
@@ -1474,6 +1487,9 @@ function updateControls() {
     const canAnalyze = Boolean(state.audioPath || state.uploadedFileName);
     loadButton.disabled = state.loading || state.analyzing;
     analyzeButton.disabled = !canAnalyze || state.loading || state.analyzing;
+    const needsAnalysis = state.needsAnalysis && !analyzeButton.disabled;
+    analyzeButton.classList.toggle("needs-analysis", needsAnalysis);
+    analyzeButton.title = needsAnalysis ? "Analyze this track to detect its chords" : "Analyze audio";
     playPauseButton.disabled = !hasAudio;
     stopButton.disabled = !hasAudio;
     seekSlider.disabled = !hasAudio;
@@ -1565,6 +1581,7 @@ async function loadSelectedLibrarySong() {
 
         if (isRecording) {
             state.chords = song.chords ?? [];
+            state.needsAnalysis = state.chords.length === 0;
             state.analysisDuration = song.duration ?? 0;
             state.timeline = buildChordTimeline(
                 state.chords,
@@ -1621,6 +1638,7 @@ async function analyzeAudio() {
     resetFeedbackScore();
     stopFeedback();
 
+    state.needsAnalysis = false;
     state.analyzing = true;
     updateControls();
 
