@@ -4,9 +4,12 @@ import {
 } from "./capo.js";
 import { FeedbackRater, FeedbackScore } from "./feedback-rating.js";
 import { buildChordTimeline, chordProgressionAt } from "./chord-progression.js";
+import { createLibraryMotion } from "./library-motion.js";
+import { createTrackRenamer } from "./rename-track.js";
 import { LocalPlayback } from "./local-playback.js";
 
 const { invoke } = window.__TAURI__.core;
+const renameTrack = createTrackRenamer(invoke);
 const { open } = window.__TAURI__.dialog;
 const localPlayback = /Windows|Macintosh|Mac OS X/.test(navigator.userAgent)
     ? new LocalPlayback(source => source.path
@@ -23,6 +26,7 @@ const state = {
 
     loading: false,
     analyzing: false,
+    needsAnalysis: false,
 
     chords: [],
     timeline: [],
@@ -207,6 +211,33 @@ const loadButton = document.querySelector("#load-audio");
 const audioLibraryModal = document.querySelector("#audio-library-modal");
 
 const audioLibraryList = document.querySelector("#audio-library-list");
+const renameLibrarySongButton = document.querySelector("#rename-library-song");
+renameLibrarySongButton.addEventListener("click", async () => {
+    const song = libraryState.songs[libraryState.selectedIndex];
+    if (!song || state.loading) return;
+    const kind = libraryState.tab;
+    const title = await renameTrack({ kind, song });
+    if (title === null) return;
+    song.name = title;
+    const isLoaded = kind === "recordings"
+        ? state.audioPath === song.wav_path
+        : state.uploadedFileName === song.filename;
+    if (isLoaded) {
+        state.audioName = title;
+        songName.textContent = title;
+        feedbackScoreSong.textContent = title;
+    }
+    renderAudioLibrary();
+    audioLibraryStatus.textContent = `Saved title: ${title}`;
+});
+for (const [id, direction] of [["library-scroll-up", -1], ["library-scroll-down", 1]]) {
+    document.getElementById(id).addEventListener("click", () => {
+        audioLibraryList.scrollBy({
+            top: direction * audioLibraryList.clientHeight * 0.8,
+            behavior: "smooth",
+        });
+    });
+}
 
 const audioLibraryEmpty = document.querySelector("#audio-library-empty");
 
@@ -631,6 +662,7 @@ const thenFallback = document.querySelector("#then-fallback");
 const chordTimerProgress = document.querySelector("#chord-timer-progress");
 const chordProgress = document.querySelector("#chord-progress");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const libraryMotion = createLibraryMotion(reducedMotion);
 
 // Map these to physical buttons (TODO)
 const capoDownButton =
@@ -642,6 +674,9 @@ const capoUpButton =
     document.querySelector(
         "#capo-up"
     );
+
+const capoResetButton = document.querySelector("#capo-reset");
+capoResetButton.addEventListener("click", () => setCapo(0));
 
 const capoPosition =
     document.querySelector(
@@ -659,6 +694,7 @@ const capoUseRecommendedButton =
     );
 
 function updateCapoControls() {
+    capoResetButton.disabled = state.capo === 0;
     capoPosition.textContent =
         String(state.capo);
 
@@ -688,7 +724,8 @@ function setCapo(position) {
 function clearCapoRecommendation() {
     state.recommendedCapo = null;
 
-    capoRecommendation.textContent = "Recommended: —";
+    capoRecommendation.textContent = "No capo suggestion yet.";
+    capoUseRecommendedButton.textContent = "Try fret —";
 
     capoRecommendation.removeAttribute("title");
 
@@ -701,10 +738,9 @@ function updateCapoRecommendation() {
 
     state.recommendedCapo = recommendation.capo;
 
-    capoRecommendation.textContent =
-        recommendation.capo === 0
-            ? "Recommended: No Capo"
-            : `Recommended: Capo ${recommendation.capo}`;
+    const suggestion = recommendation.capo === 0 ? "Try no capo" : `Try fret ${recommendation.capo}`;
+    capoRecommendation.textContent = suggestion;
+    capoUseRecommendedButton.textContent = suggestion;
 
     capoRecommendation.title = `${recommendation.easyCount} of ` + `${recommendation.totalChords} ` + `chord shapes should be easier.`;
 
@@ -759,6 +795,7 @@ function renderAudioLibrary() {
             "hidden"
         );
 
+        renameLibrarySongButton.disabled = true;
         loadLibrarySongButton.disabled =
             true;
 
@@ -893,6 +930,7 @@ function selectLibrarySong(index) {
         libraryState.selectedIndex =
             -1;
 
+        renameLibrarySongButton.disabled = true;
         loadLibrarySongButton.disabled =
             true;
 
@@ -952,11 +990,15 @@ function selectLibrarySong(index) {
     });
 
 
+    renameLibrarySongButton.disabled = state.loading;
     loadLibrarySongButton.disabled =
         false;
 }
 
 async function loadLibraryTab(tab) {
+    const switchingTabs = libraryState.tab !== tab;
+    libraryMotion.cancel(audioLibraryList);
+    libraryMotion.cancel(audioLibraryEmpty);
     libraryState.tab = tab;
     libraryState.songs = [];
     libraryState.selectedIndex = -1;
@@ -978,6 +1020,7 @@ async function loadLibraryTab(tab) {
 
     audioLibraryList.replaceChildren();
     audioLibraryEmpty.classList.add("hidden");
+    renameLibrarySongButton.disabled = true;
     loadLibrarySongButton.disabled = true;
 
     audioLibraryStatus.classList.remove("error");
@@ -998,7 +1041,9 @@ async function loadLibraryTab(tab) {
             return;
         }
 
-        libraryState.songs = songs ?? [];
+        libraryState.songs = (songs ?? []).map(song => tab === "songs"
+            ? { ...song, filename: song.name, name: song.title || song.name }
+            : song);
         libraryState.selectedIndex =
             libraryState.songs.length ? 0 : -1;
 
@@ -1011,6 +1056,9 @@ async function loadLibraryTab(tab) {
             : "";
 
         renderAudioLibrary();
+        if (switchingTabs) {
+            libraryMotion.tab(count ? audioLibraryList : audioLibraryEmpty, tab === "recordings");
+        }
 
         requestAnimationFrame(() => {
             if (libraryState.open) audioLibraryList.focus();
@@ -1034,11 +1082,13 @@ async function openAudioLibrary() {
 
     audioLibraryModal.classList.remove("hidden");
     audioLibraryModal.setAttribute("aria-hidden", "false");
+    libraryMotion.open(audioLibraryModal.querySelector(".audio-library-dialog"));
 
     await loadLibraryTab("songs");
 }
 
 function closeAudioLibrary() {
+    libraryMotion.cancelAll();
 
     libraryState.open = false;
 
@@ -1113,6 +1163,7 @@ async function confirmDeleteRecording(song) {
 }
 
 async function clearAudioSource() {
+    state.needsAnalysis = false;
     resetFeedbackScore();
     resetFocusedView();
     const feedbackStopped = stopFeedback();
@@ -1188,6 +1239,7 @@ async function applyLoadedAudio({
             : { upload: uploadedFileName }
     );
 
+    state.needsAnalysis = true;
     updatePlayerUI();
 }
 
@@ -1435,6 +1487,8 @@ function updateControls() {
     const canAnalyze = Boolean(state.audioPath || state.uploadedFileName);
     loadButton.disabled = state.loading || state.analyzing;
     analyzeButton.disabled = !canAnalyze || state.loading || state.analyzing;
+    const needsAnalysis = state.needsAnalysis && !analyzeButton.disabled;
+    analyzeButton.classList.toggle("needs-analysis", needsAnalysis);
     playPauseButton.disabled = !hasAudio;
     stopButton.disabled = !hasAudio;
     seekSlider.disabled = !hasAudio;
@@ -1509,6 +1563,7 @@ async function loadSelectedLibrarySong() {
     }
     const song =
         libraryState.songs[index];
+    renameLibrarySongButton.disabled = true;
     loadLibrarySongButton.disabled = true;
     state.loading = true;
 
@@ -1520,11 +1575,12 @@ async function loadSelectedLibrarySong() {
         await applyLoadedAudio({
             name: song.name,
             localPath: isRecording ? song.wav_path : null,
-            uploadedFileName: isRecording ? null : song.name
+            uploadedFileName: isRecording ? null : song.filename
         });
 
         if (isRecording) {
             state.chords = song.chords ?? [];
+            state.needsAnalysis = state.chords.length === 0;
             state.analysisDuration = song.duration ?? 0;
             state.timeline = buildChordTimeline(
                 state.chords,
@@ -1565,6 +1621,7 @@ async function loadSelectedLibrarySong() {
 
     } finally {
         state.loading = false;
+        renameLibrarySongButton.disabled = libraryState.selectedIndex < 0;
         updateControls();
     }
 }
@@ -1580,6 +1637,7 @@ async function analyzeAudio() {
     resetFeedbackScore();
     stopFeedback();
 
+    state.needsAnalysis = false;
     state.analyzing = true;
     updateControls();
 
@@ -2123,7 +2181,7 @@ document.addEventListener(
             return;
         }
 
-        if (deleteRecordingDialog.open) {
+        if (deleteRecordingDialog.open || document.querySelector("#rename-track-dialog").open) {
             if (event.key.toLowerCase() === "m") {
                 event.stopPropagation();
             }
@@ -2195,6 +2253,8 @@ document.addEventListener(
                 document.activeElement === loadLibrarySongButton ||
                 document.activeElement === uploadedSongsTab ||
                 document.activeElement === recordingsTab ||
+                document.activeElement === renameLibrarySongButton ||
+                document.activeElement?.closest(".audio-library-scroll-controls") ||
                 document.activeElement?.classList.contains("audio-library-delete")
             ) {
                 return;

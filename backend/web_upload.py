@@ -8,8 +8,10 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
+from library_titles import get_title, upload_title_key
 
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
+MAX_UPLOADS = 10
 
 BASE_DIR = Path(__file__).resolve().parent
 RUNTIME_DIR = BASE_DIR.parent / "runtime"
@@ -22,6 +24,21 @@ _upload_commit_lock = threading.Lock()
 
 def _is_allowed_audio(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_AUDIO_EXTENSIONS
+
+
+def _uploads_full():
+    return sum(
+        1 for path in UPLOADS_DIR.iterdir()
+        if path.is_file() and not path.is_symlink() and _is_allowed_audio(path.name)
+    ) >= MAX_UPLOADS
+
+
+def _upload_limit_response():
+    return jsonify(
+        success=False,
+        error="Song library full (10 songs). Delete an uploaded song before uploading another.",
+        error_code="upload_limit_reached",
+    ), 409
 
 
 def _unique_filename(original_name: str) -> str:
@@ -51,6 +68,7 @@ def _serialize_audio_file(path: Path) -> dict:
     stat = path.stat()
     return {
         "name": path.name,
+        "title": get_title(upload_title_key(path), path.name),
         "size": stat.st_size,
         "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
         "download_url": f"/api/uploads/{path.name}",
@@ -83,6 +101,10 @@ def upload_audio():
             "error": "Unsupported audio type. Allowed: WAV, MP3, OGG, FLAC, M4A.",
         }), 400
 
+    with _upload_commit_lock:
+        if _uploads_full():
+            return _upload_limit_response()
+
     with tempfile.NamedTemporaryFile(dir=UPLOADS_DIR, suffix=".upload", delete=False) as temp:
         temporary = Path(temp.name)
     try:
@@ -90,6 +112,9 @@ def upload_audio():
         # Commit complete files atomically and prevent simultaneous uploads
         # with the same name from replacing each other's audio.
         with _upload_commit_lock:
+            # Recheck after saving: another upload may have taken the last slot.
+            if _uploads_full():
+                return _upload_limit_response()
             stored_name = _unique_filename(audio_file.filename)
             destination = UPLOADS_DIR / stored_name
             temporary.replace(destination)

@@ -37,6 +37,7 @@ pub fn run() {
                 list_uploaded_audio,
                 load_uploaded_audio,
                 list_recordings,
+                rename_library_track,
                 delete_recording,
 
                 begin_recording,
@@ -116,6 +117,8 @@ async fn revoke_upload_sessions() -> Result<serde_json::Value, String> {
 )]
 struct UploadedAudio {
     name: String,
+    #[serde(default)]
+    title: Option<String>,
     size: u64,
     modified: String,
     download_url: String,
@@ -397,6 +400,23 @@ async fn delete_recording(id: u64) -> Result<(), String> {
 
 fn default_confidence() -> f64 {
     1.0
+}
+
+#[tauri::command]
+async fn rename_library_track(
+    kind: String, id: Option<u64>, filename: Option<String>, title: String,
+) -> Result<String, String> {
+    let response = reqwest::Client::new()
+        .post(format!("{BACKEND_URL}/api/library/title"))
+        .json(&serde_json::json!({"kind": kind, "id": id, "filename": filename, "title": title}))
+        .send().await.map_err(|e| format!("Could not save title: {e}"))?;
+    let status = response.status();
+    let payload: serde_json::Value = response.json().await
+        .map_err(|e| format!("Invalid rename response: {e}"))?;
+    if !status.is_success() || payload["success"].as_bool() != Some(true) {
+        return Err(payload["error"].as_str().unwrap_or("Could not save title.").to_string());
+    }
+    payload["title"].as_str().map(str::to_owned).ok_or_else(|| "Missing saved title.".to_string())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -292,11 +292,14 @@ export function initRecordMode({
 
             setIdle();
 
-            recordTitle.textContent =
-                "Microphone Unavailable";
+            const libraryFull = String(error).includes("Recording library full");
+            recordTitle.textContent = libraryFull
+                ? "Recording Library Full"
+                : "Microphone Unavailable";
 
-            recordDetail.textContent =
-                "Check the recording service, then try again.";
+            recordDetail.textContent = libraryFull
+                ? "All 20 recording slots are used. Delete a recording in Browse Tracks > Recordings to make room."
+                : "Check the recording service, then try again.";
 
             setStatus(
                 `Could not start recording: ${error}`,

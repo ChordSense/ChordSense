@@ -1151,7 +1151,7 @@ body {
         min(92vw, 680px);
 
     max-height:
-        min(82vh, 680px);
+        92dvh;
 
     overflow: hidden;
 
@@ -1276,10 +1276,15 @@ body {
 
     gap: 6px;
 
-    min-height: 160px;
+    min-height: 0;
+    flex: 1 1 240px;
     max-height: 42vh;
 
     overflow-y: auto;
+    touch-action: pan-y;
+    overscroll-behavior-y: contain;
+    scrollbar-width: auto;
+    scrollbar-gutter: stable;
 
     padding: 4px;
 
@@ -1290,6 +1295,8 @@ body {
 
 
 .audio-library-song {
+    flex-shrink: 0;
+    min-height: 64px;
     display: grid;
 
     grid-template-columns:
@@ -1560,164 +1567,139 @@ body {
     }
 }
 
-/* Focused practice keeps transport beside the song and gives the chord field
-   the rest of the viewport. The current halo keeps its normal size limit. */
+/* Focus view reserves the remaining screen for the three chord diagrams. */
 .app.focused-playing {
-    padding-top: clamp(12px, 1.2vh, 20px);
-    padding-bottom: clamp(12px, 1.2vh, 20px);
+    display: flex;
+    flex-direction: column;
+    height: 100svh;
+    min-height: 100svh;
+    padding: clamp(10px, 1.5vh, 18px) clamp(12px, 2vw, 32px);
 }
-
 .app.focused-playing .app-header {
+    flex: 0 0 auto;
     grid-template-columns: minmax(0, 1fr) auto;
 }
-
 .app.focused-playing .app-header h1 {
     margin: 0;
     font-size: clamp(24px, 1.7vw, 36px);
 }
-
 .app.focused-playing .logo {
     padding: 4px 12px;
     border-radius: 18px;
     font-size: clamp(22px, 1.7vw, 34px);
 }
-
 .app.focused-playing .mode-switcher,
 .app.focused-playing #play-mode > .toolbar,
-.app.focused-playing #play-mode > .divider {
-    display: none;
-}
-
-.app.focused-playing > .divider {
-    margin: clamp(8px, .8vh, 12px) 0;
-}
+.app.focused-playing #play-mode > .divider { display: none; }
+.app.focused-playing > .divider { flex: 0 0 2px; margin: 8px 0; }
 
 .app.focused-playing #play-mode {
-    display: flex;
-    flex-direction: column;
-    min-height: calc(100svh - 100px);
+    display: grid;
+    flex: 1 1 0;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-areas: "song" "transport" "status" "chords";
+    align-items: stretch;
+    row-gap: 4px;
 }
-
-.app.focused-playing .now-playing {
-    order: 0;
-    max-width: 100%;
-    margin: 0;
-}
-
-.app.focused-playing .vinyl-icon {
-    width: clamp(28px, 2vw, 40px);
-    height: clamp(28px, 2vw, 40px);
-}
-
-.app.focused-playing .song-pill {
-    padding: 6px 12px;
-    font-size: clamp(14px, 1vw, 18px);
-}
-
+.app.focused-playing .now-playing { grid-area: song; margin: 0; min-width: 0; }
+.app.focused-playing .vinyl-icon { width: 32px; height: 32px; }
+.app.focused-playing .song-pill { padding: 6px 12px; font-size: 17px; }
 .app.focused-playing .player {
-    order: 1;
+    grid-area: transport;
     min-width: 0;
-    margin: 6px 0 0;
+    margin: 0;
     gap: clamp(8px, .8vw, 14px);
 }
-
-.app.focused-playing .icon-button {
-    width: clamp(40px, 3vw, 50px);
-    height: clamp(40px, 3vw, 50px);
-}
-
-.app.focused-playing .icon-button img {
-    width: clamp(36px, 2.8vw, 46px);
-    height: clamp(36px, 2.8vw, 46px);
-}
-
-.app.focused-playing .timeline {
-    flex: 1 1 240px;
-    width: auto;
-    max-width: 700px;
-}
-
+.app.focused-playing .icon-button { width: 48px; height: 48px; }
+.app.focused-playing .icon-button img { width: 44px; height: 44px; }
+.app.focused-playing .timeline { flex: 1 1 200px; width: auto; max-width: none; }
 .app.focused-playing .speed-control,
-.app.focused-playing .focus-toggle {
-    min-height: 42px;
-    padding-top: 5px;
-    padding-bottom: 5px;
-}
-
-.app.focused-playing .focus-toggle {
-    background: #f5ebda;
-    color: #111;
-}
-
+.app.focused-playing .focus-toggle { min-height: 48px; padding-top: 6px; padding-bottom: 6px; }
+.app.focused-playing .focus-toggle { background: #f5ebda; color: #111; }
 .app.focused-playing #status {
-    order: 2;
+    grid-area: status;
     min-height: 1.2em;
-    margin: 4px 0 0;
-    font-size: clamp(11px, .9vw, 14px);
+    margin: 0;
+    font-size: 13px;
     line-height: 1.2;
 }
-
 .app.focused-playing .chord-display {
-    order: 3;
-    flex: 1 0 auto;
-    margin: 0 auto;
+    grid-area: chords;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
 }
-
 .app.focused-playing .chord-playfield {
-    height: max(540px, calc(100svh - 210px));
+    --halo-size: min(44vw, calc(100svh - 230px), 820px);
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, .8fr);
+    align-items: center;
+    gap: clamp(10px, 1.5vw, 28px);
+    height: 100%;
+    min-height: 0;
 }
-
-@media (min-width: 1600px) {
-    .app.focused-playing #play-mode {
-        display: grid;
-        grid-template-columns: minmax(0, min(30vw, 620px)) minmax(0, 1fr);
-        grid-template-areas:
-            "song transport"
-            "status status"
-            "chords chords";
-        column-gap: clamp(20px, 2vw, 42px);
-        align-items: center;
-    }
-
-    .app.focused-playing .now-playing { grid-area: song; }
-    .app.focused-playing .player {
-        grid-area: transport;
-        margin: 0;
-        flex-wrap: nowrap;
-    }
-    .app.focused-playing #status { grid-area: status; }
-    .app.focused-playing .chord-display { grid-area: chords; }
+.app.focused-playing .chord-active {
+    position: relative;
+    top: auto;
+    left: auto;
+    justify-self: center;
+    width: min(100%, var(--halo-size));
+    height: auto;
+    aspect-ratio: 1;
+    transform: none;
 }
+.app.focused-playing .chord-upcoming { display: contents; }
+.app.focused-playing .chord-preview,
+.app.focused-playing .chord-preview.then-card {
+    width: 100%;
+    height: 88%;
+    min-height: 0;
+}
+.app.focused-playing .chord-preview.then-card { height: 76%; opacity: .65; }
+.app.focused-playing .chord-diagram-slot {
+    flex: 1 1 0;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+}
+.app.focused-playing .chord-role,
+.app.focused-playing .chord-label { flex-shrink: 0; }
+.app.focused-playing .chord-image,
+.app.focused-playing .chord-preview .chord-image,
+.app.focused-playing .chord-preview.then-card .chord-image {
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+}
+.app.focused-playing .chord-role { font-size: clamp(15px, 1.3vw, 24px); }
+.app.focused-playing .chord-label { font-size: clamp(26px, 2.3vw, 42px); }
+.app.focused-playing .chord-preview .chord-label { font-size: clamp(23px, 2vw, 36px); }
+.app.focused-playing .chord-preview.then-card .chord-label { font-size: clamp(21px, 1.8vw, 32px); }
 
-@media (min-width: 1600px) and (min-height: 900px) {
-    .app.focused-playing {
-        display: flex;
-        flex-direction: column;
-        height: 100svh;
-    }
-
+@media (min-width: 1280px) {
     .app.focused-playing #play-mode {
-        flex: 1 1 auto;
-        min-height: 0;
+        grid-template-columns: minmax(0, .8fr) minmax(0, 1.6fr);
         grid-template-rows: auto auto minmax(0, 1fr);
-    }
-
-    .app.focused-playing .chord-display,
-    .app.focused-playing .chord-playfield {
-        height: 100%;
-        min-height: 0;
+        grid-template-areas: "song transport" "status status" "chords chords";
+        column-gap: 20px;
     }
 }
-
-@media (max-height: 850px) {
+@media (max-width: 900px) and (orientation: portrait) {
     .app.focused-playing .chord-playfield {
-        height: max(430px, calc(100svh - 245px));
+        --halo-size: min(72vw, calc((100svh - 260px) * .56), 720px);
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1.4fr) minmax(0, 1fr);
     }
+    .app.focused-playing .chord-active { grid-column: 1 / -1; }
+    .app.focused-playing .chord-preview,
+    .app.focused-playing .chord-preview.then-card { height: 100%; }
 }
-
-@media (max-width: 520px) {
+@media (max-width: 760px) {
     .app.focused-playing .player { flex-wrap: wrap; }
-    .app.focused-playing .timeline { flex-basis: 190px; }
+    .app.focused-playing .timeline { flex-basis: 180px; }
 }
 
 /* Library tabs */
@@ -1745,6 +1727,7 @@ body {
 
 /* Recording rows and delete buttons */
 .audio-library-item {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -1757,6 +1740,7 @@ body {
 }
 
 .audio-library-delete {
+    min-height: 48px;
     flex: 0 0 auto;
     padding: 10px 12px;
     border: 1.5px solid #b83c3c;
@@ -1806,4 +1790,226 @@ body {
     background: #a32828;
     color: white;
     border-color: #a32828;
+}
+
+/* Keep controls reachable while the track list scrolls on the touch display. */
+.audio-library-dialog > :not(.audio-library-list) {
+    flex-shrink: 0;
+}
+
+.audio-library-scroll-controls {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.audio-library-scroll-controls button {
+    flex: 1;
+    min-height: 48px;
+    touch-action: manipulation;
+}
+
+.audio-library-list::-webkit-scrollbar {
+    width: 18px;
+}
+
+.audio-library-list::-webkit-scrollbar-thumb {
+    background: #756b5e;
+    border: 3px solid #f5ede0;
+    border-radius: 12px;
+}
+
+.audio-library-close {
+    width: 48px;
+    height: 48px;
+}
+
+@media (max-height: 650px) {
+    .audio-library-dialog { padding: 14px; }
+    .audio-library-eyebrow { display: none; }
+    .audio-library-header h2 { font-size: 28px; }
+    .audio-library-shortcuts { margin-top: 8px; }
+}
+
+/* Large touch targets for the attached-screen Library and capo controls. */
+.audio-library-dialog {
+    box-sizing: border-box;
+    width: 95vw;
+    height: 94dvh;
+    max-height: 94dvh;
+    padding: 20px;
+}
+.audio-library-header h2 { font-size: 36px; }
+.audio-library-shortcuts { font-size: 16px; margin: 10px 0; }
+.audio-library-list { max-height: none; flex: 1 1 0; gap: 10px; }
+.audio-library-song { min-height: 80px; padding: 16px 20px; }
+.audio-library-song-name { font-size: 24px; }
+.audio-library-song-size { font-size: 17px; }
+.audio-library-dialog .library-tab,
+.audio-library-dialog .library-button,
+.audio-library-delete,
+.audio-library-close {
+    min-height: 64px;
+    font-size: 20px;
+    padding: 12px 20px;
+    touch-action: manipulation;
+}
+.audio-library-close { min-width: 64px; width: 64px; padding: 0; }
+.audio-library-scroll-controls button { min-height: 64px; }
+.audio-library-actions { flex-wrap: wrap; gap: 12px; }
+.audio-library-actions-right { flex-wrap: wrap; gap: 12px; }
+.audio-library-status { margin: 8px 0; }
+.audio-library-delete { min-width: 100px; }
+
+.capo-controls { flex-wrap: wrap; gap: 12px; }
+.capo-controls .capo-step {
+    width: 64px;
+    height: 64px;
+    font-size: 32px;
+    border-radius: 12px;
+}
+.capo-title { font-size: 21px; }
+.capo-position { font-size: 28px; min-width: 40px; }
+.capo-controls .capo-reset,
+.capo-controls .capo-use-recommended {
+    min-height: 64px;
+    padding: 12px 18px;
+    font-size: 20px;
+    border: 2px solid #111;
+    background: transparent;
+    color: #111;
+    touch-action: manipulation;
+}
+.capo-controls .capo-reset:disabled { opacity: .35; }
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.rename-track-dialog {
+    box-sizing: border-box;
+    width: min(95vw, 1000px);
+    max-height: 94dvh;
+    overflow-y: auto;
+    padding: 24px;
+    border: 2px solid #111;
+    border-radius: 18px;
+    background: #f5ede0;
+    color: #111;
+}
+.rename-track-dialog::backdrop { background: rgb(0 0 0 / .6); }
+.rename-track-dialog h2 { margin: 0 0 12px; font-size: 30px; }
+.rename-track-dialog label { display: block; font-size: 20px; margin-bottom: 8px; }
+.rename-track-dialog input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 64px;
+    padding: 12px;
+    font: inherit;
+    font-size: 24px;
+    border: 2px solid #111;
+    border-radius: 10px;
+}
+.rename-track-error { min-height: 24px; margin: 8px 0; color: #a32828; }
+.rename-track-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.rename-track-dialog button {
+    min-height: 64px;
+    padding: 12px 20px;
+    border: 2px solid #111;
+    border-radius: 10px;
+    background: #f5ede0;
+    color: #111;
+    font: inherit;
+    font-size: 22px;
+    touch-action: manipulation;
+}
+#rename-track-save { background: #111; color: #f5ede0; }
+.rename-keyboard { margin-top: 16px; }
+.rename-keyboard-row { display: flex; justify-content: center; gap: 8px; margin-top: 8px; }
+.rename-keyboard-row button { flex: 1; min-width: 0; padding: 8px 4px; }
+.rename-keyboard-row button[aria-pressed="true"] { background: #111; color: #f5ede0; }
+.rename-track-dialog button:disabled { opacity: .4; }
+@media (max-height: 650px) {
+    .audio-library-dialog { padding: 12px; }
+    .audio-library-header h2 { font-size: 28px; }
+    .audio-library-subtitle, .audio-library-shortcuts { display: none; }
+    .audio-library-tabs { margin-top: 8px; }
+    .rename-track-dialog { padding: 12px; }
+    .rename-track-dialog h2 { font-size: 24px; margin-bottom: 6px; }
+    .rename-track-dialog label { display: none; }
+    .rename-keyboard { margin-top: 8px; }
+    .rename-keyboard-row { gap: 6px; margin-top: 6px; }
+    .rename-keyboard-row button { min-height: 56px; }
+}
+
+
+/* Static emphasis avoids a continuous animation after loading a track. */
+.toolbar #analyze.needs-analysis {
+    background: #24633c;
+    color: #fff;
+    outline: 3px solid #24633c;
+    outline-offset: 3px;
+}
+
+.mode-switcher {
+    display: flex;
+    gap: 12px;
+}
+.mode-switcher .mode-tab {
+    min-height: 68px;
+    min-width: 150px;
+    padding: 14px 24px;
+    font-size: 23px;
+    touch-action: manipulation;
+}
+@media (max-width: 520px) {
+    .mode-switcher { width: 100%; }
+    .mode-switcher .mode-tab { flex: 1; min-width: 0; padding: 14px 16px; }
+}
+
+
+/* Larger touch targets in the main toolbar. */
+.toolbar #load-audio,
+.toolbar #analyze,
+.toolbar #live-feedback-toggle {
+    min-height: 72px;
+    padding: 16px 26px;
+    font-size: 24px;
+    touch-action: manipulation;
+}
+.capo-title { font-size: 25px; gap: 10px; }
+.capo-icon { width: 36px; height: 36px; }
+
+/* Keep diagram sizes ordered even when the focus preview cards have more room. */
+.chord-playfield {
+    --diagram-size: max(40px, calc(var(--halo-size) - 140px));
+}
+.chord-active .chord-image,
+.app.focused-playing .chord-active .chord-image {
+    width: min(100%, var(--diagram-size));
+    height: var(--diagram-size);
+}
+.chord-preview .chord-image,
+.app.focused-playing .chord-preview .chord-image {
+    width: min(100%, calc(var(--diagram-size) * .9));
+    height: calc(var(--diagram-size) * .9);
+}
+.chord-preview.then-card .chord-image,
+.app.focused-playing .chord-preview.then-card .chord-image {
+    width: min(100%, calc(var(--diagram-size) * .8));
+    height: calc(var(--diagram-size) * .8);
+}
+
+/* Center shorter cards so their headings sit below the current-chord heading. */
+.app.focused-playing .chord-preview {
+    height: min(100%, max(100px, calc(var(--halo-size) - 96px)));
+}
+.app.focused-playing .chord-preview.then-card {
+    height: min(100%, max(90px, calc(var(--halo-size) - 126px)));
 }
