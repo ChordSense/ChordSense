@@ -31,7 +31,7 @@ def companion_request_allowed() -> bool:
         return method in {"GET", "POST"}
     if request.path.startswith("/api/uploads/"):
         return method in {"GET", "DELETE"}
-    if request.path in {"/api/pairing/claim", "/api/pairing/logout"}:
+    if request.path in {"/api/pairing/claim", "/api/pairing/proof", "/api/pairing/logout"}:
         return method == "POST"
     return False
 
@@ -57,7 +57,7 @@ def install_device_access(app, manager=None) -> None:
             for value in os.environ.get("CHORDSENSE_ALLOWED_ORIGINS", "").split(",")
             if value.strip()
         }
-        if is_local_desktop_request() and request.path not in {"/api/pairing/claim", "/api/pairing/logout"}:
+        if is_local_desktop_request() and request.path not in {"/api/pairing/claim", "/api/pairing/proof", "/api/pairing/logout"}:
             return None
         if not companion_request_allowed():
             return jsonify({
@@ -78,7 +78,7 @@ def install_device_access(app, manager=None) -> None:
             }:
                 return jsonify({"success": False, "error": "Unsupported browser request."}), 403
             return "", 204
-        if request.path == "/api/pairing/claim":
+        if request.path in {"/api/pairing/claim", "/api/pairing/proof"}:
             return None
         supplied = request.headers.get("Authorization", "")
         token = supplied[7:] if supplied.startswith("Bearer ") else ""

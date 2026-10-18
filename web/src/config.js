@@ -1,2 +1,2 @@
-// Fixed local device address. The build may select a supported local endpoint.
-export const defaultApiUrl = "http://chordsense.local:5051";
+// Device addresses come only from the server-rendered discovery bootstrap.
+export const discoveryPath = "/api/discovery/resolve";

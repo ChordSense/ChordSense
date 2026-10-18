@@ -48,7 +48,7 @@ for directory in (RUNTIME_DIR, INPUTS_DIR, OUTPUTS_DIR):
 class DeviceRequest(Request):
     @property
     def max_content_length(self):
-        if request.path == "/api/pairing/claim":
+        if request.path in {"/api/pairing/claim", "/api/pairing/proof"}:
             return 1024
         if is_local_desktop_request():
             return current_app.config["MAX_CONTENT_LENGTH"]
@@ -209,7 +209,7 @@ def _run_analysis_request(work, cleanup=None, overflow_result=None):
 
 @app.errorhandler(413)
 def upload_too_large(_error):
-    if request.path == "/api/pairing/claim":
+    if request.path in {"/api/pairing/claim", "/api/pairing/proof"}:
         return jsonify({"success": False, "error": "Pairing request is too large.", "error_code": "invalid_request"}), 413
     return jsonify({"success": False, "error": "Audio exceeds the configured upload limit."}), 413
 
@@ -266,7 +266,16 @@ def revoke_upload_sessions():
 @app.post("/api/pairing/claim")
 def claim_upload_pairing():
     body = request.get_json(silent=True) or {}
-    return jsonify({"success": True, **pairing_manager(app).claim(body.get("code"), request.headers.get("Origin"))})
+    return jsonify({"success": True, **pairing_manager(app).claim(
+        body.get("code"), request.headers.get("Origin"),
+        pairing_id=body.get("pairing_id"), proof_key=body.get("proof_key"),
+    )})
+
+
+@app.post("/api/pairing/proof")
+def prove_upload_pairing():
+    body = request.get_json(silent=True) or {}
+    return jsonify({"success": True, **pairing_manager(app).proof(body.get("pairing_id"), body.get("challenge"))})
 
 
 @app.post("/api/pairing/logout")

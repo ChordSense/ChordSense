@@ -3,7 +3,7 @@
 ChordSense combines a local Pi device interface with a separate companion website:
 
 - **Attached-screen app:** `device-ui/` provides Play Along, Record, chord diagrams, playback controls and live feedback. Its native bridge calls `127.0.0.1:5051`.
-- **Companion website:** `web/` is the static Vercel song manager. A computer or phone on the same reachable LAN pairs with a short code and uploads, lists, downloads or deletes songs.
+- **Companion website:** `web/` is the Vercel song manager. A small discovery function finds the Pi's current Wi-Fi address from a short code; uploads, lists, downloads and deletes then go directly across the LAN.
 - **Backend and hardware:** `backend/` retains API port **5051**; Rust `iod` owns ADC recording and DAC playback. Browser permissions cover pairing and the upload library only.
 - **Optional analysis worker:** `backend/analysis_worker.py` can move whole-song/recording inference to another host. Live feedback remains local.
 
@@ -11,13 +11,15 @@ The companion replaces the Flask-rendered **`/upload` page formerly served on po
 
 ## Pair a laptop or phone
 
-The website uses a configured Pi address, defaulting to `http://chordsense.local:5051`. The current campus deployment uses the Pi's private LAN IP because `.local` resolution failed on that network. Tap **Pair uploads** on the updated Pi screen to generate a six-digit code, open the displayed website, enter the code and select **Pair device**. Allow local-network access if your browser asks. No device URL or long token needs to be typed.
+The Pi publishes its current Wi-Fi address to the companion's short-lived discovery directory when **Pair uploads** starts. Entering the six-digit code finds that address automatically. There is no IP address in the website build, `.local` dependency, URL entry or network scan. Tailscale is for administrative SSH only; users need no Tailscale installation.
+
+Tap **Pair uploads** on the updated Pi screen to generate a six-digit code, open the displayed website, enter the code and select **Pair device**. Allow local-network access if your browser asks. No device URL or long token needs to be typed.
 
 Codes last 120 seconds, work once and close after five wrong attempts. A successful claim creates an eight-hour upload-only session for the current browser tab. Closing the Pi pairing dialog cancels an unused code; **Disconnect all** revokes every browser session. API restarts require pairing again.
 
-The website lets every browser attempt a connection. HTTPS-to-local-HTTP behavior varies by browser, so report observed results rather than excluding browser brands. Wi-Fi must allow peer communication; the default `.local` endpoint additionally requires Avahi/mDNS. Guest Wi-Fi/client isolation can block access. This is a trusted-network prototype: HTTP does not encrypt codes, tokens or audio. See [browser test results](docs/browser-compatibility.md).
+The website lets every browser attempt a connection. HTTPS-to-local-HTTP behavior varies by browser, and Wi-Fi must allow peer communication. Allow browser local-network access if asked. Discovery uses HTTPS, but subsequent LAN HTTP does not encrypt pairing claims, tokens or audio. After the Pi's Wi-Fi IP changes, show a fresh code and pair again; existing sessions do not silently move to another address. No website redeployment is needed. See [connection requirements](docs/web-device-architecture.md#connection-options) and [browser test results](docs/browser-compatibility.md).
 
-See [the architecture and Vercel guide](docs/web-device-architecture.md), [Pi deployment steps](backend/deploy/README.md), and [verified deployment record](docs/pi-pairing-deployment.md). The matching backend **and rebuilt native screen app** are required; publishing the website alone does not update an installed Pi app. The current website and Pi are deployed, with the actual browser pairing/upload/download/delete/disconnect cycle verified.
+Automatic discovery is implemented locally but **not activated**: Upstash Marketplace terms acceptance and storage provisioning are pending, and this feature has not been deployed or copied to the Pi. It needs one backend source update, discovery environment settings and one API restart; the existing Pair uploads screen needs no rebuild, and `iod` needs no restart. See [the setup guide](docs/web-device-architecture.md#vercel-setup-from-the-local-working-directory), [Pi update steps](backend/deploy/README.md#activate-automatic-discovery-on-an-existing-pi) and [dated deployment record](docs/pi-pairing-deployment.md). Earlier browser results do not validate the new discovery flow.
 
 ## Prerequisites
 
@@ -62,7 +64,7 @@ python3 -m venv .venv
 
 `setup.py` uses `backend/.venv`; some existing manual installations use `backend/venv`. Match the real Python environment in the API launcher/service rather than creating another running process. The hardware deployment also needs the existing system Hailo bindings and `iod` socket configuration.
 
-Configure the exact Vercel production origin in `CHORDSENSE_ALLOWED_ORIGINS`, and set `CHORDSENSE_COMPANION_URL` to that public website address displayed by the Pi. The API listens on `0.0.0.0:5051` for LAN uploads; its native bridge still uses loopback. Pairing issues browser tokens automatically; there is no shared device token.
+Configure the exact Vercel production origin in `CHORDSENSE_ALLOWED_ORIGINS`, and set `CHORDSENSE_COMPANION_URL` to that public website address displayed by the Pi. Set `CHORDSENSE_DISCOVERY_URL` to its `/api/discovery/publish` endpoint and share the private `CHORDSENSE_DISCOVERY_TOKEN` only between the Pi and Vercel function. The API listens on `0.0.0.0:5051` for LAN uploads; its native bridge still uses loopback. Browser upload tokens are issued by pairing and are separate from this server publication secret.
 
 ## Model repository setup
 
@@ -92,7 +94,7 @@ npm run tauri build
 
 Build/install the matching Linux/Pi artifact and relaunch the existing screen launcher to obtain **Pair uploads**. The executable path above assumes the default Cargo target directory. For development, use `npm run tauri dev`.
 
-The local native folder is now flat and named `device-ui/`, with a `device-ui` executable. The stopped Pi has not received this reorganization or rename; its installed binary and UI service still use the prior layout recorded in [the deployment record](docs/pi-pairing-deployment.md). A future device update must copy/rebuild `device-ui/` and adjust that service's `WorkingDirectory` and `ExecStart` before restarting it.
+The local native folder is flat and named `device-ui/`, with a `device-ui` executable. The [dated deployment record](docs/pi-pairing-deployment.md) uses the earlier Pi layout. Verify the installed service before a future native update, and adjust its `WorkingDirectory` and `ExecStart` when migrating it to `device-ui/`. Automatic discovery needs an API update/restart, but no native rebuild or folder migration.
 
 Start the matching backend separately with `python serve.py` from its configured environment, or restart its existing configured service. Use one API process; native hardware/session ownership is process-local. Follow [backend/deploy/README.md](backend/deploy/README.md) for environment loading, hostname setup and both startup steps. Remote companion sessions cannot record, play, seek, run live feedback or submit analysis jobs.
 
@@ -106,13 +108,19 @@ npm --prefix web test
 npm --prefix web run build
 ```
 
-Open `http://127.0.0.1:5173/` and add that exact development origin to the backend allowlist when testing. Generate a pairing code through the native app.
+`npm run dev` previews the static interface at `http://127.0.0.1:5173/`; it does not run the HTTPS discovery function. Unit tests supply mocked discovery/device services. Test real automatic pairing through the configured HTTPS deployment and updated Pi backend.
 
-Vercel uses the **repository root**: leave Root Directory blank, Framework Other, build `node web/scripts/build.mjs`, output `web/dist`. The root [vercel.json](vercel.json) supplies those settings and the root [.vercelignore](.vercelignore) uploads only website source/configuration, excluding backend/models/data/environments. The public `CHORDSENSE_API_URL=http://chordsense.local:5051` may be set explicitly; it is also the default.
+Vercel uses the **repository root**: leave Root Directory blank, Framework Other, build `node web/scripts/build.mjs`, and clear any Output Directory override. The build keeps `web/dist` and emits static assets, a Node.js 22 discovery function and routing in `.vercel/output` using the [Build Output API](https://vercel.com/docs/build-output-api). The function generates the page's exact CSP from its discovered endpoint at request time. Remove `CHORDSENSE_API_URL`; builds reject that obsolete setting.
 
-With a Vercel account, run `npx vercel@latest login`, `npx vercel@latest link` (project directory `./`), configure Production settings/environment, then `npx vercel@latest deploy --prod`. This uses current local files without staging or committing. Use the resulting stable production origin on the Pi; keep codes, session tokens and worker secrets out of frontend source/build variables.
+With a Vercel account, run `npx vercel@latest login` and `npx vercel@latest link` (project directory `./`). Provision the free Upstash store with automatic upgrades disabled, then set the server environment described in [the setup guide](docs/web-device-architecture.md#vercel-setup-from-the-local-working-directory). Build/test and deploy local files without a Git commit:
 
-For the current campus configuration, use `npx vercel@latest deploy --prod --build-env CHORDSENSE_API_URL=http://10.136.137.225:5051`. Its exact private-IP endpoint is allowed in `vercel.json`; if DHCP changes that address, update the CSP and build override before redeploying. The source default remains `.local` for networks where mDNS works.
+```sh
+npm --prefix web test
+npm --prefix web run build
+npx vercel@latest deploy --prebuilt --prod
+```
+
+Vercel runtime settings are `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` (or their `KV_REST_API_URL`/`KV_REST_API_TOKEN` aliases), `CHORDSENSE_DISCOVERY_TOKEN` and the exact `CHORDSENSE_COMPANION_ORIGIN`. Keep these server-side; neither Redis credentials nor the publication secret belongs in frontend assets. The old SSH preparation CLI is removed because the Pi publishes its address for each new pairing window.
 
 ## Pi efficiency and audio
 
