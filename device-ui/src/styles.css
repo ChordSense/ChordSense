@@ -1985,3 +1985,31 @@ body {
 }
 .capo-title { font-size: 25px; gap: 10px; }
 .capo-icon { width: 36px; height: 36px; }
+
+/* Keep diagram sizes ordered even when the focus preview cards have more room. */
+.chord-playfield {
+    --diagram-size: max(40px, calc(var(--halo-size) - 140px));
+}
+.chord-active .chord-image,
+.app.focused-playing .chord-active .chord-image {
+    width: min(100%, var(--diagram-size));
+    height: var(--diagram-size);
+}
+.chord-preview .chord-image,
+.app.focused-playing .chord-preview .chord-image {
+    width: min(100%, calc(var(--diagram-size) * .9));
+    height: calc(var(--diagram-size) * .9);
+}
+.chord-preview.then-card .chord-image,
+.app.focused-playing .chord-preview.then-card .chord-image {
+    width: min(100%, calc(var(--diagram-size) * .8));
+    height: calc(var(--diagram-size) * .8);
+}
+
+/* Center shorter cards so their headings sit below the current-chord heading. */
+.app.focused-playing .chord-preview {
+    height: min(100%, max(100px, calc(var(--halo-size) - 96px)));
+}
+.app.focused-playing .chord-preview.then-card {
+    height: min(100%, max(90px, calc(var(--halo-size) - 126px)));
+}
