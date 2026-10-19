@@ -1,8 +1,10 @@
 import os
+import hashlib
+import hmac
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import app as backend_app
 from pairing import PairingError, PairingManager
@@ -15,7 +17,7 @@ class PairingManagerTests(unittest.TestCase):
     def setUp(self):
         self.now = 100.0
         self.wall = 1_700_000_000.0
-        self.manager = PairingManager(clock=lambda: self.now, wall_clock=lambda: self.wall)
+        self.manager = PairingManager(clock=lambda: self.now, wall_clock=lambda: self.wall, publisher=None)
 
     def assert_claim_error(self, code, status):
         with self.assertRaises(PairingError) as error:
@@ -111,7 +113,7 @@ class PairingManagerTests(unittest.TestCase):
         self.assertTrue(self.manager.authenticate(existing, ORIGIN))
 
     def test_session_limit_and_expiry_bound_memory(self):
-        self.manager = PairingManager(clock=lambda: self.now, max_sessions=2)
+        self.manager = PairingManager(clock=lambda: self.now, max_sessions=2, publisher=None)
         tokens = [self.manager.claim(self.manager.start()["code"], ORIGIN)["token"] for _ in range(2)]
         with self.assertRaises(PairingError) as error:
             self.manager.start()
@@ -136,7 +138,7 @@ class PairingManagerTests(unittest.TestCase):
 class PairingRouteTests(unittest.TestCase):
     def setUp(self):
         self.now = 100.0
-        self.manager = PairingManager(clock=lambda: self.now)
+        self.manager = PairingManager(clock=lambda: self.now, publisher=None)
         self.environment = patch.dict(os.environ, {
             "CHORDSENSE_ALLOWED_ORIGINS": ORIGIN,
             "CHORDSENSE_COMPANION_URL": ORIGIN,
@@ -251,6 +253,120 @@ class PairingRouteTests(unittest.TestCase):
                 self.assertEqual(self.client.get("/api/pairing/status").get_json()["website_url"], "")
         with patch.dict(os.environ, {"CHORDSENSE_COMPANION_URL": ORIGIN + "/uploads"}):
             self.assertEqual(self.client.post("/api/pairing/start").get_json()["website_url"], ORIGIN + "/uploads")
+
+
+class DiscoveryPairingRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 100.0
+        self.publisher = Mock()
+        self.manager = PairingManager(clock=lambda: self.now, publisher=self.publisher)
+        environment = patch.dict(os.environ, {
+            "CHORDSENSE_ALLOWED_ORIGINS": ORIGIN,
+            "CHORDSENSE_COMPANION_URL": ORIGIN,
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+        manager = patch.dict(backend_app.app.extensions, {"chordsense_pairing": self.manager})
+        manager.start()
+        self.addCleanup(manager.stop)
+        self.client = backend_app.app.test_client()
+
+    def start(self):
+        response = self.client.post("/api/pairing/start")
+        self.assertEqual(response.status_code, 200)
+        return response.get_json(), self.publisher.publish.call_args.kwargs
+
+    def test_proof_endpoint_is_origin_checked_and_returns_only_exact_hmac_contract(self):
+        native, publication = self.start()
+        challenge = "1234567890abcdef" * 4
+        body = {"pairing_id": publication["pairing_id"], "challenge": challenge}
+        for origin in (None, "", "null", ORIGIN + ".attacker.example"):
+            headers = {} if origin is None else {"Origin": origin}
+            response = self.client.post("/api/pairing/proof", json=body, headers=headers)
+            self.assertEqual(response.status_code, 403)
+        response = self.client.post("/api/pairing/proof", json=body, headers={"Origin": ORIGIN})
+        expected = hmac.new(publication["proof_key"].encode(),
+                            f"chordsense-pairing-v1\n{publication['pairing_id']}\n{challenge}".encode(),
+                            hashlib.sha256).hexdigest()
+        self.assertEqual(response.get_json(), {"success": True, "pairing_id": publication["pairing_id"], "proof": expected})
+        self.assertEqual(response.headers["Access-Control-Allow-Origin"], ORIGIN)
+        self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+        self.assertNotIn("proof_key", native)
+        self.assertNotIn("pairing_id", native)
+        self.assertNotIn(publication["proof_key"], response.get_data(as_text=True))
+        self.assertEqual(self.manager.status()["attempts_remaining"], 5)
+
+    def test_configured_claim_requires_directory_binding_then_keeps_upload_only_scope(self):
+        native, publication = self.start()
+        headers = {"Origin": ORIGIN}
+        body = {key: publication[key] for key in ("pairing_id", "proof_key")}
+        body["code"] = native["code"]
+        for invalid in ({"code": native["code"]}, {**body, "proof_key": "x" * 43}, {**body, "pairing_id": "old-window"}):
+            response = self.client.post("/api/pairing/claim", json=invalid, headers=headers)
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.get_json()["error_code"], "pairing_mismatch")
+        self.assertEqual(self.manager.status()["attempts_remaining"], 5)
+        response = self.client.post("/api/pairing/claim", json=body, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        authenticated = {**headers, "Authorization": "Bearer " + response.get_json()["token"]}
+        self.assertEqual(self.client.get("/health", headers=authenticated).status_code, 200)
+        self.assertEqual(self.client.post("/begin_recording", headers=authenticated).status_code, 403)
+        self.assertEqual(self.client.post("/api/pairing/start", headers=authenticated).status_code, 403)
+        self.assertEqual(self.client.post("/api/pairing/proof", json={
+            "pairing_id": publication["pairing_id"], "challenge": "a" * 64,
+        }, headers=headers).status_code, 409)
+        self.publisher.delete_later.assert_called_once_with(publication["pairing_id"])
+
+    def test_proof_preflight_is_narrow_and_private_network_permission_is_exact_origin_only(self):
+        headers = {"Origin": ORIGIN, "Access-Control-Request-Method": "POST",
+                   "Access-Control-Request-Headers": "Content-Type",
+                   "Access-Control-Request-Private-Network": "true"}
+        response = self.client.options("/api/pairing/proof", headers=headers)
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.headers["Access-Control-Allow-Private-Network"], "true")
+        for changed in ({"Origin": ORIGIN + ".attacker.example"}, {"Access-Control-Request-Method": "GET"},
+                        {"Access-Control-Request-Headers": "X-Private-Secret"}):
+            response = self.client.options("/api/pairing/proof", headers={**headers, **changed})
+            self.assertEqual(response.status_code, 403)
+            self.assertNotIn("Access-Control-Allow-Private-Network", response.headers)
+        self.assertEqual(self.client.get("/api/pairing/proof", headers={"Origin": ORIGIN}).status_code, 403)
+        self.assertEqual(self.client.post("/api/pairing/proof").status_code, 403)
+
+    def test_both_unauthenticated_pairing_bodies_have_a_one_kib_limit(self):
+        self.start()
+        for path in ("/api/pairing/proof", "/api/pairing/claim"):
+            response = self.client.post(path, json={"padding": "x" * 2048}, headers={"Origin": ORIGIN})
+            self.assertEqual(response.status_code, 413)
+            self.assertEqual(response.get_json()["error_code"], "invalid_request")
+            response = self.client.post(path, json=[], headers={"Origin": ORIGIN})
+            self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.manager.status()["attempts_remaining"], 5)
+
+    def test_expired_and_replaced_windows_cannot_prove_or_claim(self):
+        native, publication = self.start()
+        self.now += 120
+        headers = {"Origin": ORIGIN}
+        self.assertEqual(self.client.post("/api/pairing/proof", json={
+            "pairing_id": publication["pairing_id"], "challenge": "a" * 64,
+        }, headers=headers).status_code, 409)
+        self.assertEqual(self.client.post("/api/pairing/claim", json={
+            "code": native["code"], "pairing_id": publication["pairing_id"], "proof_key": publication["proof_key"],
+        }, headers=headers).status_code, 410)
+        self.start()
+        self.assertEqual(self.client.post("/api/pairing/proof", json={
+            "pairing_id": publication["pairing_id"], "challenge": "a" * 64,
+        }, headers=headers).status_code, 409)
+
+    def test_failed_directory_publication_returns_no_code_or_private_exception_details(self):
+        self.publisher.publish.side_effect = RuntimeError("private-publisher-secret")
+        response = self.client.post("/api/pairing/start")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json()["error_code"], "discovery_unavailable")
+        self.assertNotIn("code", response.get_json())
+        self.assertNotIn("private-publisher-secret", response.get_data(as_text=True))
+        status = self.client.get("/api/pairing/status").get_json()
+        self.assertIsNone(status["code"])
+        self.assertEqual(status["session_count"], 0)
 
 
 if __name__ == "__main__":
