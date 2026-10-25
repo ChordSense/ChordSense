@@ -657,19 +657,14 @@
     "top_level_sheets": [
       {
         "filename": "chordsense_afe.kicad_sch",
-        "name": "Root",
-        "uuid": "e8ec7fa2-469d-4d23-8913-10b2ac958b2c"
+        "name": "chordsense_afe",
+        "uuid": "00000000-0000-0000-0000-000000000000"
       }
     ],
-    "used_designators": "#PWR1,#PWR3,#PWR8-30,J2-4,R1,R7-10,#FLG1-3,IC1-2,C2-6,RV1-2,U1,VR1-2",
+    "used_designators": "",
     "variants": []
   },
-  "sheets": [
-    [
-      "e8ec7fa2-469d-4d23-8913-10b2ac958b2c",
-      "Root"
-    ]
-  ],
+  "sheets": [],
   "text_variables": {},
   "tuning_profiles": {
     "meta": {
