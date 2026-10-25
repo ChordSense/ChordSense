@@ -63,7 +63,7 @@ The companion system shall provide:
 | Control               | Stable-state behavior                  | Context-specific behavior                                          |
 | --------------------- | -------------------------------------- | ------------------------------------------------------------------ |
 | Power                 | Boot or request safe shutdown          | A long hold is emergency shutdown.                                 |
-| Mode                  | Toggle Play Along and Record           | Disabled in locked states.                                         |
+| Mode                  | Cycle Play Along, Record, and Tune     | Disabled in locked states.                                         |
 | Song Select / Library | Open the song library                  | Return to the library from an idle song screen.                    |
 | Play                  | Select, start, confirm, play, or pause | Starts recording in Record Ready; accepts a take in Record Review. |
 | Stop                  | Stop recording or playback             | Discards the take in Record Review and returns to Record Ready.    |
@@ -118,6 +118,10 @@ The user connects a guitar, presses Play to start, and presses Stop to finish th
 - Stop discards the take and returns to Record Ready.
 
 The saved recording becomes available in Play Along and its tab/recording is queued for account synchronization.
+
+### Tune
+
+A chromatic guitar tuner on the same guitar input. ChordSense shows the nearest note, a needle meter from −50 to +50 cents, flat/sharp indicators, and the frequency. The player may pick a string from the selected tuning (Standard, Half Step Down, Drop D, DADGAD, Open G) to measure against that string even when it is more than a semitone off, and may change the A4 reference from 415 to 466 Hz. Entering Tune stops any playback; leaving it releases the guitar stream before Record claims the input.
 
 ## FSM Rules
 
@@ -196,6 +200,20 @@ Live Feedback comparison contract:
 - a sustained, reliable different root: red badge;
 - no reliable detection, input clipping, silence, startup warmup, or stale audio: neutral state without an overlay; and
 - rhythm, onset timing, voicing quality, and fingering quality are outside the MVP.
+
+### Tune states
+
+| State               | Locked? | Definition and transitions                                                                                     |
+| ------------------- | :-----: | -------------------------------------------------------------------------------------------------------------- |
+| `TUNER_LISTENING`   |   No    | Stream guitar input and show no reading until a single note is detected. Mode may switch to another mode.     |
+| `TUNER_READING`     |   No    | Show note, cents, and direction. Holding within ±3 cents for 500 ms confirms in tune until the note moves ±5. |
+| `TUNER_INPUT_ERROR` |   No    | Input is clipping or unavailable. Show the cause; Retry restarts the stream.                                  |
+
+Tune comparison contract:
+
+- in tune: within ±3 cents (green); close: within ±10 cents (amber); otherwise far (red);
+- the reading fades after about 0.6 s of silence or unclear pitch instead of showing a wrong note; and
+- chords, strumming, and polyphonic tuning are outside the MVP: the tuner expects one string at a time.
 
 ### Connectivity and synchronization states
 
@@ -296,3 +314,4 @@ A stable-state Power press enters `SHUTTING_DOWN`. A Power press in a locked sta
 10. Six selected songs plus the most recent unpinned song remain available offline, subject to unsynchronized-data protections.
 11. Wi-Fi loss does not prevent cached playback, recording, analysis, or local save.
 12. A normal shutdown never interrupts an atomic local commit.
+13. Tune reads each open string of a correctly tuned guitar within ±3 cents and releases the guitar input when the user leaves Tune.

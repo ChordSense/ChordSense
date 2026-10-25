@@ -1,0 +1,354 @@
+/* ========================================
+   TUNE MODE
+   ======================================== */
+
+.tuner-container {
+    --tuner-far: #f0605a;
+    --tuner-close: #f2b33d;
+    --tuner-in-tune: #2fd36b;
+    --tuner-ink: #f0e6d2;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    width: min(92vw, 1100px);
+
+    margin:
+        clamp(14px, 3vh, 44px)
+        auto 0;
+}
+
+
+/* Meter card */
+
+.tuner-panel {
+    --zone: var(--tuner-ink);
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    width: min(88vw, 860px);
+
+    padding:
+        clamp(18px, 2.6vh, 36px)
+        clamp(20px, 3vw, 48px)
+        clamp(16px, 2.4vh, 30px);
+
+    border-radius: clamp(20px, 2vw, 32px);
+
+    background: #363531;
+    color: var(--tuner-ink);
+
+    text-align: center;
+
+    box-shadow: 0 18px 45px rgba(0, 0, 0, 0.14);
+}
+
+.tuner-panel[data-zone="far"] { --zone: var(--tuner-far); }
+.tuner-panel[data-zone="close"] { --zone: var(--tuner-close); }
+.tuner-panel[data-zone="in-tune"] { --zone: var(--tuner-in-tune); }
+
+.tuner-meter {
+    width: min(100%, 640px, 62vh);
+    height: auto;
+    overflow: visible;
+}
+
+.tuner-band {
+    fill: none;
+    stroke-width: 10;
+    stroke-linecap: butt;
+}
+
+.tuner-band.close {
+    stroke: var(--tuner-close);
+    opacity: 0.35;
+}
+
+.tuner-band.in-tune {
+    stroke: var(--tuner-in-tune);
+}
+
+.tuner-tick {
+    stroke: var(--tuner-ink);
+    stroke-width: 2;
+    opacity: 0.45;
+}
+
+.tuner-tick.major {
+    stroke-width: 3;
+    opacity: 0.8;
+}
+
+.tuner-tick.centre {
+    stroke: var(--tuner-in-tune);
+    stroke-width: 4;
+    opacity: 1;
+}
+
+.tuner-scale-label {
+    fill: var(--tuner-ink);
+    font-size: 15px;
+    font-weight: 700;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+}
+
+.tuner-needle line {
+    stroke: var(--zone);
+    stroke-width: 6;
+    stroke-linecap: round;
+}
+
+.tuner-needle circle {
+    fill: var(--zone);
+}
+
+.tuner-needle line,
+.tuner-needle circle {
+    transition: stroke 160ms ease, fill 160ms ease, opacity 200ms ease;
+}
+
+.tuner-panel[data-mode="idle"] .tuner-needle line,
+.tuner-panel[data-mode="idle"] .tuner-needle circle,
+.tuner-panel[data-mode="error"] .tuner-needle line,
+.tuner-panel[data-mode="error"] .tuner-needle circle {
+    opacity: 0.3;
+}
+
+
+/* Note name with flat/sharp indicators */
+
+.tuner-readout {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+
+    width: 100%;
+
+    margin-top: clamp(2px, 0.8vh, 12px);
+}
+
+.tuner-note {
+    margin: 0;
+
+    min-width: 2.2ch;
+
+    font-family: "Rakkas", serif;
+    font-size: clamp(96px, 13vh, 170px);
+    line-height: 1;
+
+    color: var(--zone);
+
+    transition: color 160ms ease, opacity 200ms ease;
+}
+
+.tuner-note sub {
+    font-family: Inter, Arial, sans-serif;
+    font-size: 0.24em;
+    font-weight: 700;
+    vertical-align: baseline;
+    margin-left: 0.08em;
+    opacity: 0.75;
+}
+
+.tuner-panel[data-mode="idle"] .tuner-note,
+.tuner-panel[data-mode="held"] .tuner-note {
+    opacity: 0.45;
+}
+
+.tuner-arrow {
+    font-size: clamp(30px, 4vh, 52px);
+    font-weight: 700;
+    white-space: nowrap;
+
+    opacity: 0.18;
+
+    transition: opacity 120ms ease, color 120ms ease;
+}
+
+.tuner-arrow.flat { justify-self: end; margin-right: clamp(14px, 2vw, 34px); }
+.tuner-arrow.sharp { justify-self: start; margin-left: clamp(14px, 2vw, 34px); }
+
+.tuner-arrow.lit {
+    color: var(--zone);
+    opacity: 1;
+}
+
+/* Rakkas has no accidentals; use the UI font's glyphs. */
+.tuner-accidental {
+    font-family: "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols", sans-serif;
+}
+
+.tuner-detail {
+    min-height: 1.4em;
+
+    margin: clamp(6px, 1vh, 12px) 0 0;
+
+    font-size: clamp(17px, 1.6vw, 25px);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+
+    opacity: 0.85;
+}
+
+.tuner-retry {
+    margin-top: 14px;
+
+    border-color: var(--tuner-ink);
+    color: var(--tuner-ink);
+}
+
+.tuner-panel.pulse {
+    animation: tuner-in-tune-pulse 700ms ease-out;
+}
+
+@keyframes tuner-in-tune-pulse {
+    0% {
+        box-shadow:
+            0 18px 45px rgba(0, 0, 0, 0.14),
+            0 0 0 0 rgba(47, 211, 107, 0.7);
+    }
+
+    100% {
+        box-shadow:
+            0 18px 45px rgba(0, 0, 0, 0.14),
+            0 0 0 26px rgba(47, 211, 107, 0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tuner-panel.pulse {
+        animation: none;
+    }
+}
+
+
+/* String picker */
+
+.tuner-strings {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+
+    gap: clamp(10px, 1.2vw, 18px);
+
+    margin-top: clamp(16px, 2.6vh, 32px);
+}
+
+.tuner-string {
+    min-width: clamp(64px, 6vw, 84px);
+    min-height: clamp(64px, 6vw, 84px);
+
+    border: 3px solid #111;
+    border-radius: 999px;
+
+    background: transparent;
+    color: #111;
+
+    font-family: "Rakkas", serif;
+    font-size: clamp(28px, 2.6vw, 40px);
+    line-height: 1;
+
+    cursor: pointer;
+
+    transition:
+        background 140ms ease,
+        color 140ms ease,
+        transform 120ms ease;
+}
+
+.tuner-string.auto {
+    padding: 0 clamp(18px, 1.6vw, 26px);
+
+    font-family: Inter, Arial, sans-serif;
+    font-size: clamp(16px, 1.3vw, 21px);
+    font-weight: 700;
+}
+
+.tuner-string.near {
+    background: #111;
+    color: #f0e6d2;
+}
+
+.tuner-string[aria-pressed="true"] {
+    border-color: #205d3b;
+    background: #205d3b;
+    color: #fff;
+}
+
+.tuner-string:active {
+    transform: translateY(1px);
+}
+
+
+/* Tuning and reference pitch */
+
+.tuner-settings {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+
+    gap: clamp(14px, 3vw, 48px);
+
+    margin-top: clamp(14px, 2.4vh, 28px);
+}
+
+.tuner-setting {
+    display: flex;
+    align-items: center;
+
+    gap: 10px;
+    padding: 6px;
+
+    border: 2px solid #111;
+    border-radius: 999px;
+}
+
+.tuner-setting-text {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    min-width: clamp(130px, 11vw, 170px);
+
+    line-height: 1.15;
+}
+
+.tuner-setting-label {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+
+    opacity: 0.6;
+}
+
+.tuner-setting-text strong {
+    font-size: clamp(17px, 1.4vw, 22px);
+    font-variant-numeric: tabular-nums;
+}
+
+.tuner-step {
+    width: 52px;
+    height: 52px;
+
+    border: 0;
+    border-radius: 999px;
+
+    background: #111;
+    color: #f0e6d2;
+
+    font-size: 22px;
+    font-weight: 700;
+
+    cursor: pointer;
+}
+
+.tuner-step:active {
+    transform: translateY(1px);
+}

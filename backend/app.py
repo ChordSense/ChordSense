@@ -71,6 +71,8 @@ analysis_jobs = AnalysisJobs()
 analysis_execution_lock = threading.Lock()
 live_feedback_session = None
 live_feedback_session_lock = threading.RLock()
+tuner_session = None
+tuner_session_lock = threading.RLock()
 
 
 def create_recording_recognizer():
@@ -87,10 +89,25 @@ def get_live_feedback_session():
     return live_feedback_session
 
 
+def get_tuner_session():
+    global tuner_session
+    with tuner_session_lock:
+        if tuner_session is None:
+            from tuner_session import TunerSession
+            tuner_session = TunerSession(iod=iod)
+    return tuner_session
+
+
 @atexit.register
 def close_live_feedback_session():
     if live_feedback_session is not None:
         live_feedback_session.stop()
+
+
+@atexit.register
+def close_tuner_session():
+    if tuner_session is not None:
+        tuner_session.stop()
 
 
 def _remote_analysis_enabled():
@@ -292,7 +309,7 @@ def health():
         "analysis_backend": "remote" if _remote_analysis_enabled() else "local",
         "record_model_backend": "remote" if _remote_analysis_enabled() else "hailo",
         "max_upload_bytes": request.max_content_length,
-        "capabilities": {"companion_uploads": True, "local_analysis": True, "local_live_feedback": True, "local_device_playback": True},
+        "capabilities": {"companion_uploads": True, "local_analysis": True, "local_live_feedback": True, "local_device_playback": True, "local_tuner": True},
     })
 
 
@@ -532,23 +549,27 @@ def live_feedback_status():
 
 @app.get("/feedback/events")
 def live_feedback_events():
-    from live_feedback_session import FeedbackStateError
+    return _live_input_events(get_live_feedback_session())
 
-    session = get_live_feedback_session()
+
+def _live_input_events(session):
+    """SSE stream of one live-input session's events (feedback or tuner)."""
+    from live_input_session import LiveInputStateError
+
     session_id = request.args.get("session_id", "")
     try:
         after = max(0, int(request.args.get("after", "0")))
     except ValueError:
         return jsonify({"success": False, "error": "invalid after sequence"}), 400
     if session_id != session.status()["session_id"]:
-        return jsonify({"success": False, "error": "unknown feedback session"}), 404
+        return jsonify({"success": False, "error": f"unknown {session.label} session"}), 404
 
     def generate():
         sequence = after
         while True:
             try:
                 event = session.wait_event(session_id, sequence)
-            except FeedbackStateError:
+            except LiveInputStateError:
                 break
             if event is None:
                 yield ": keepalive\n\n"
@@ -565,6 +586,69 @@ def live_feedback_events():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# -- tuner: single-note pitch on the same live guitar stream --
+
+def _tuner_settings_from_body(body: dict) -> dict:
+    settings = {}
+    if "a4_hz" in body:
+        settings["a4_hz"] = body["a4_hz"]
+    if "target_midi" in body:
+        settings["target_midi"] = body["target_midi"]
+    return settings
+
+
+@app.post("/tuner/start")
+def start_tuner():
+    from live_input_session import LiveInputBusyError
+
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"success": False, "error": "JSON body must be an object"}), 400
+    session = get_tuner_session()
+    try:
+        session.configure(**_tuner_settings_from_body(body))
+        return jsonify({"success": True, **session.start()}), 201
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except LiveInputBusyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 503
+
+
+@app.post("/tuner/config")
+def configure_tuner():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"success": False, "error": "JSON body must be an object"}), 400
+    session = get_tuner_session()
+    try:
+        session.configure(**_tuner_settings_from_body(body))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    return jsonify({"success": True, **session.status()})
+
+
+@app.post("/tuner/stop")
+def stop_tuner():
+    try:
+        return jsonify({"success": True, **get_tuner_session().stop()})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.get("/tuner/status")
+def tuner_status():
+    return jsonify({"success": True, **get_tuner_session().status()})
+
+
+@app.get("/tuner/events")
+def tuner_events():
+    return _live_input_events(get_tuner_session())
+
+
 # -- playback: iod plays audio out of the I2S DAC to the pedal's headphone jack --
 
 def _iod_call(action):

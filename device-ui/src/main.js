@@ -7,8 +7,11 @@ import {
     initRecordMode
 } from "./record.js";
 import { initUploadPairing } from "./upload-pairing.js";
+import { initTunerMode } from "./tuner.js";
 
 initUploadPairing();
+
+const tuner = initTunerMode();
 
 
 const playMode =
@@ -22,6 +25,32 @@ const playModeButton =
 
 const recordModeButton =
     document.querySelector("#record-mode-button");
+
+const tunerMode =
+    document.querySelector("#tuner-mode");
+
+const tunerModeButton =
+    document.querySelector("#tuner-mode-button");
+
+const MODES = ["play", "record", "tune"];
+
+const MODE_VIEWS = {
+    play: playMode,
+    record: recordMode,
+    tune: tunerMode
+};
+
+const MODE_BUTTONS = {
+    play: playModeButton,
+    record: recordModeButton,
+    tune: tunerModeButton
+};
+
+const MODE_TITLES = {
+    play: "Mode: Play Along",
+    record: "Mode: Record",
+    tune: "Mode: Tune"
+};
 
 const modeTitle =
     document.querySelector("#mode-title");
@@ -52,29 +81,19 @@ async function updateHeader(mode) {
     await wait(180);
 
     modeTitle.textContent =
-        mode === "play"
-            ? "Mode: Play Along"
-            : "Mode: Record";
+        MODE_TITLES[mode];
 
-    playModeButton.classList.toggle(
-        "active",
-        mode === "play"
-    );
+    for (const [name, button] of Object.entries(MODE_BUTTONS)) {
+        button.classList.toggle(
+            "active",
+            mode === name
+        );
 
-    recordModeButton.classList.toggle(
-        "active",
-        mode === "record"
-    );
-
-    playModeButton.setAttribute(
-        "aria-pressed",
-        String(mode === "play")
-    );
-
-    recordModeButton.setAttribute(
-        "aria-pressed",
-        String(mode === "record")
-    );
+        button.setAttribute(
+            "aria-pressed",
+            String(mode === name)
+        );
+    }
 
     modeTitle.classList.remove(
         "header-leaving"
@@ -99,7 +118,7 @@ async function showMode(mode) {
         mode === currentMode ||
         isModeTransitioning ||
         (
-            mode === "play" &&
+            mode !== "record" &&
             isRecordingLocked
         )
     ) {
@@ -109,17 +128,17 @@ async function showMode(mode) {
     isModeTransitioning = true;
 
     const outgoingView =
-        currentMode === "play"
-            ? playMode
-            : recordMode;
+        MODE_VIEWS[currentMode];
 
     const incomingView =
-        mode === "play"
-            ? playMode
-            : recordMode;
-    // Release the live stream before Record can claim the input.
-    if (mode === "record") {
+        MODE_VIEWS[mode];
+    // Release the live stream before Record can claim the input. Tuning
+    // mid-song also stops the backing track so the two never overlap.
+    if (currentMode === "play") {
         await stopPlayback();
+    }
+    if (currentMode === "tune") {
+        await tuner.leave();
     }
     // fade out
     const headerTransition = updateHeader(mode);
@@ -138,6 +157,9 @@ async function showMode(mode) {
     incomingView.classList.remove("mode-entering");
     // update mode controls
     currentMode = mode;
+    if (mode === "tune") {
+        void tuner.enter();
+    }
     await Promise.all([
         headerTransition,
         wait(180)
@@ -159,8 +181,14 @@ recordModeButton.addEventListener(
 );
 
 
+tunerModeButton.addEventListener(
+    "click",
+    () => showMode("tune")
+);
+
+
 /*
- * Preserve the old M shortcut.
+ * Preserve the old M shortcut; it now cycles Play Along, Record and Tune.
  */
 window.addEventListener(
     "keydown",
@@ -178,9 +206,9 @@ window.addEventListener(
 
         if (event.key.toLowerCase() === "m") {
             showMode(
-                currentMode === "play"
-                    ? "record"
-                    : "play"
+                MODES[
+                    (MODES.indexOf(currentMode) + 1) % MODES.length
+                ]
             );
         }
     }
@@ -214,6 +242,9 @@ initRecordMode({
          * halfway through recording.
          */
         playModeButton.disabled =
+            locked;
+
+        tunerModeButton.disabled =
             locked;
     }
 });

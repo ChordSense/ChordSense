@@ -1,9 +1,12 @@
 mod feedback_bridge;
+mod live_bridge;
+mod tuner_bridge;
 
 use feedback_bridge::{
     FeedbackBridge, pause_live_feedback, resume_live_feedback,
     start_live_feedback, stop_live_feedback,
 };
+use tuner_bridge::{TunerBridge, configure_tuner, start_tuner, stop_tuner};
 
 // Checks if there is a connection to the backend
 #[tauri::command]
@@ -21,6 +24,7 @@ async fn backend_health() -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(FeedbackBridge::default())
+        .manage(TunerBridge::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(
@@ -47,6 +51,10 @@ pub fn run() {
                 pause_live_feedback,
                 resume_live_feedback,
                 stop_live_feedback,
+
+                start_tuner,
+                configure_tuner,
+                stop_tuner,
 
                 load_audio_file,
 

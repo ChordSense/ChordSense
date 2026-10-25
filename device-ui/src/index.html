@@ -12,6 +12,7 @@
 
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/record.css" />
+    <link rel="stylesheet" href="/tuner.css" />
 
     <script type="module" src="/main.js"></script>
 </head>
@@ -44,6 +45,15 @@
                 aria-pressed="false"
             >
                 Record
+            </button>
+
+            <button
+                id="tuner-mode-button"
+                class="mode-tab"
+                type="button"
+                aria-pressed="false"
+            >
+                Tune
             </button>
         </nav>
 
@@ -338,6 +348,61 @@
 
         </div>
 
+    </section>
+
+    <section id="tuner-mode" class="mode-view hidden">
+        <div class="tuner-container">
+            <div id="tuner-panel" class="tuner-panel" data-mode="idle" data-zone="none">
+                <svg class="tuner-meter" viewBox="0 0 400 236" aria-hidden="true">
+                    <g id="tuner-scale"></g>
+                    <g id="tuner-needle" class="tuner-needle">
+                        <line x1="200" y1="214" x2="200" y2="46" />
+                        <circle cx="200" cy="214" r="11" />
+                    </g>
+                </svg>
+
+                <div class="tuner-readout">
+                    <span id="tuner-flat" class="tuner-arrow flat" aria-hidden="true">
+                        <span class="tuner-accidental">♭</span> ▶
+                    </span>
+                    <p class="tuner-note">
+                        <span id="tuner-note-name">–</span><sub id="tuner-note-octave"></sub>
+                    </p>
+                    <span id="tuner-sharp" class="tuner-arrow sharp" aria-hidden="true">
+                        ◀ <span class="tuner-accidental">♯</span>
+                    </span>
+                </div>
+
+                <p id="tuner-detail" class="tuner-detail">Play a single string</p>
+                <button id="tuner-retry" class="record-button secondary tuner-retry" type="button" hidden>
+                    Try again
+                </button>
+            </div>
+
+            <div id="tuner-strings" class="tuner-strings" role="group" aria-label="String to tune"></div>
+
+            <div class="tuner-settings">
+                <div class="tuner-setting" role="group" aria-label="Tuning">
+                    <button id="tuner-tuning-prev" class="tuner-step" type="button" aria-label="Previous tuning">◀</button>
+                    <span class="tuner-setting-text">
+                        <span class="tuner-setting-label">Tuning</span>
+                        <strong id="tuner-tuning-name" aria-live="polite">Standard</strong>
+                    </span>
+                    <button id="tuner-tuning-next" class="tuner-step" type="button" aria-label="Next tuning">▶</button>
+                </div>
+
+                <div class="tuner-setting" role="group" aria-label="Reference pitch">
+                    <button id="tuner-a4-down" class="tuner-step" type="button" aria-label="Lower reference pitch">−</button>
+                    <span class="tuner-setting-text">
+                        <span class="tuner-setting-label">A4</span>
+                        <strong id="tuner-a4-value" aria-live="polite">440 Hz</strong>
+                    </span>
+                    <button id="tuner-a4-up" class="tuner-step" type="button" aria-label="Raise reference pitch">+</button>
+                </div>
+            </div>
+
+            <p id="tuner-status" class="sr-only" role="status" aria-live="polite"></p>
+        </div>
     </section>
 
     <!-- live rating overlay -->
