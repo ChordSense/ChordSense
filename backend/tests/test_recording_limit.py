@@ -24,14 +24,14 @@ class RecordingLimitTests(unittest.TestCase):
         for number in range(count):
             (self.captures / f"capture-{number}.wav").write_bytes(b"saved audio")
 
-    def test_twentieth_recording_is_allowed(self):
-        self.populate(19)
+    def test_240th_recording_is_allowed(self):
+        self.populate(239)
         start = Mock()
         library.start_recording_capture(start)
         start.assert_called_once_with()
 
     def test_full_and_overfull_libraries_preserve_every_recording(self):
-        for count in (20, 23):
+        for count in (240, 243):
             with self.subTest(count=count):
                 self.populate(count)
                 before = {p.name: p.read_bytes() for p in self.captures.iterdir()}
@@ -43,7 +43,7 @@ class RecordingLimitTests(unittest.TestCase):
                 self.assertEqual(before, {p.name: p.read_bytes() for p in self.captures.iterdir()})
 
     def test_explicit_deletion_frees_a_slot(self):
-        self.populate(20)
+        self.populate(240)
         recording = library.list_recordings()[0]
         library.delete_recording(recording["id"])
         start = Mock()
@@ -51,7 +51,7 @@ class RecordingLimitTests(unittest.TestCase):
         start.assert_called_once_with()
 
     def test_failed_capture_does_not_consume_a_slot(self):
-        self.populate(19)
+        self.populate(239)
         with self.assertRaisesRegex(RuntimeError, "unavailable"):
             library.start_recording_capture(Mock(side_effect=RuntimeError("unavailable")))
         start = Mock()

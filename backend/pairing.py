@@ -206,7 +206,7 @@ class PairingManager:
                     "token_type": "Bearer",
                     "expires_in": self._session_seconds,
                     "expires_at": self._wall_clock() + self._session_seconds,
-                    "permissions": ["uploads"],
+                    "permissions": ["uploads", "recordings:read"],
                 }
         finally:
             self._cleanup(cleanup_id)

@@ -13,7 +13,7 @@ CAPTURES_DIR = Path(os.environ.get(
 )).resolve()
 INDEX_FILE = RUNTIME_DIR / "recordings-index.json"
 _LOCK = threading.Lock()
-MAX_RECORDINGS = 20
+MAX_RECORDINGS = 240
 
 
 class RecordingLimitReached(RuntimeError):
@@ -28,7 +28,7 @@ def start_recording_capture(start_capture):
             _write(index)
         if len(index["recordings"]) >= MAX_RECORDINGS:
             raise RecordingLimitReached(
-                "Recording library full (20 recordings). "
+                f"Recording library full ({MAX_RECORDINGS} recordings). "
                 "Delete a recording in Browse Tracks > Recordings before recording again."
             )
         # Serialize the check and capture start. iod rejects a second active capture.

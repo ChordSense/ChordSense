@@ -25,6 +25,8 @@ from offline_model import ALLOWED_CHORD_DICTIONARIES, parse_lab_file, run_local_
 from playback_speed import PlaybackSpeedController, PlaybackSpeedError
 from pairing import PairingError
 from web_upload import ALLOWED_AUDIO_EXTENSIONS, resolve_upload_path, web_upload
+from recording_exports import recording_exports, public_recordings
+from recordings_library import MAX_RECORDINGS
 
 from recordings_library import (
     rename_recording,
@@ -58,6 +60,7 @@ class DeviceRequest(Request):
 app = Flask(__name__, static_folder=None)
 app.request_class = DeviceRequest
 app.register_blueprint(web_upload)
+app.register_blueprint(recording_exports)
 app.config["COMPANION_MAX_CONTENT_LENGTH"] = int(os.environ.get("CHORDSENSE_MAX_UPLOAD_MB", "95")) * 1024 * 1024
 # Keep the native app's existing 300 MiB request limit. Only companion uploads
 # need the smaller tunnel-compatible cap; Flask applies it per request above.
@@ -352,7 +355,8 @@ def recordings_list():
     try:
         return jsonify({
             "success": True,
-            "recordings": get_saved_recordings(),
+            "recordings": get_saved_recordings() if is_local_desktop_request() else public_recordings(),
+            "limit": MAX_RECORDINGS,
         })
     except Exception as error:
         return jsonify({

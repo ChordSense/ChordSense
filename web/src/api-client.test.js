@@ -71,7 +71,7 @@ test("a code goes only in the same-origin discovery POST body and navigation sta
 
 test("malformed codes never contact the directory or a device", async () => {
     const f = fixture();
-    for (const value of [123456, "12345", "abcdef", "１２３４５６", "12 345"]) await assert.rejects(f.session.pairDevice(value), /six-digit/);
+    for (const value of [123456, "12345", "abcdef", "ï¼‘ï¼’ï¼“ï¼”ï¼•ï¼–", "12 345"]) await assert.rejects(f.session.pairDevice(value), /six-digit/);
     assert.equal(f.calls.length, 0);
 });
 
@@ -305,7 +305,7 @@ test("active transfers block discovery, pairing completion, and disconnect", asy
     assert.throws(f.session.apiHeaders, /six-digit/);
 });
 
-test("the local API remains upload-scoped with proof and claim always unauthenticated", async () => {
+test("the companion API remains library-scoped with proof and claim always unauthenticated", async () => {
     const calls = [];
     const client = createApiClient({ baseUrl: device, token: "private-token", fetchImpl: async (url, options) => { calls.push({ url, options }); return Response.json({ success: true }); } });
     for (const path of ["/begin_recording", "/playback/play", "/feedback/stop", "/api/pairing/start", "/analyze", "//foreign.example"]) assert.throws(() => client.endpoint(path), /Invalid song library/);
@@ -431,4 +431,22 @@ test("downloads preserve audio and validation rejects unsupported or oversized s
     assert.throws(() => validateAudioFile({ name: "song.wav", size: MAX_AUDIO_BYTES }), /smaller than 95/);
     assert.throws(() => validateAudioFile({ name: "script.js", size: 10 }), /WAV, MP3/);
     assert.match(responseError({}, 429).message, /Too many attempts/);
+});
+
+test("recording downloads use the paired device and preserve binary audio", async () => {
+    const calls = [];
+    const client = createApiClient({ baseUrl: device, token: "token", fetchImpl: async (url, options) => {
+        calls.push({ url, options });
+        return new Response(new Uint8Array([82, 73, 70, 70, 0, 255]));
+    }});
+    for (const path of ["/api/recordings/12/audio", "/api/recordings/export"]) {
+        assert.deepEqual(new Uint8Array(await (await client.request(path, { blob: true })).arrayBuffer()), new Uint8Array([82, 73, 70, 70, 0, 255]));
+        assert.equal(calls.at(-1).url, `${device}${path}`);
+        assert.equal(calls.at(-1).options.headers.Authorization, "Bearer token");
+    }
+    assert.equal(client.endpoint("/api/recordings"), `${device}/api/recordings`);
+    for (const path of ["/api/recordings/12", "/api/recordings/../audio", "/api/recordings/12/audio?token=leak"]) {
+        assert.throws(() => client.endpoint(path));
+    }
+    assert.match(responseError({ error_code: "recording_not_ready" }, 409).message, /Stop recording/);
 });

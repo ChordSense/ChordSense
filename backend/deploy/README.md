@@ -160,7 +160,7 @@ Native-only loopback routes:
 | `POST` | `/api/pairing/cancel` | Cancel the pending code |
 | `POST` | `/api/pairing/revoke` | Cancel pairing and revoke all sessions |
 
-Browser proof: `POST /api/pairing/proof` with the discovered `pairing_id` and a fresh challenge. After HMAC verification, the claim is `POST /api/pairing/claim` with `code`, `pairing_id` and `proof_key`. A successful result supplies `token`, `expires_in: 28800`, `expires_at` in Unix seconds and `permissions: ["uploads"]`. The claim requires a valid open window rather than an existing session. CORS preflight may proceed without a session only for permitted routes/methods and the exact allowed website origin.
+Browser proof: `POST /api/pairing/proof` with the discovered `pairing_id` and a fresh challenge. After HMAC verification, the claim is `POST /api/pairing/claim` with `code`, `pairing_id` and `proof_key`. A successful result supplies `token`, `expires_in: 28800`, `expires_at` in Unix seconds and `permissions: ["uploads", "recordings:read"]`. The claim requires a valid open window rather than an existing session. CORS preflight may proceed without a session only for permitted routes/methods and the exact allowed website origin.
 
 Authenticated browser operations:
 
