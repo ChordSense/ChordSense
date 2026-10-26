@@ -1,4 +1,5 @@
 import { apiRequest, apiEndpoint, apiHeaders, beginTransfer, validateAudioFile, handleUploadError } from "./api-client.js";
+import "./recordings.js";
 import { initConnectionSettings } from "./connection-settings.js";
 
 const fileInput = document.querySelector("#file-input");
@@ -77,8 +78,8 @@ function uploadSelectedFile() {
     progressPanel.classList.remove("hidden");
     progressBar.style.width = "0%";
     progressPercent.textContent = "0%";
-    progressLabel.textContent = "Sending song…";
-    setStatus("Sending to ChordSense…");
+    progressLabel.textContent = "Sending songâ€¦";
+    setStatus("Sending to ChordSenseâ€¦");
     const finish = () => { release(); uploading = false; uploadButton.disabled = false; };
     const failed = message => {
         finish();
@@ -202,14 +203,14 @@ document.addEventListener("device-connection-failed", () => {
     libraryList.replaceChildren();
 });
 document.addEventListener("device-session-expired", () => {
-    connectionStatus.textContent = "Pair with ChordSense again to manage songs.";
+    connectionStatus.textContent = "Pair with ChordSense again to manage songs and recordings.";
     connectionStatus.classList.remove("connected");
     connectionStatus.classList.add("error");
     libraryList.replaceChildren();
     libraryEmpty.classList.add("hidden");
 });
 document.addEventListener("device-disconnected", () => {
-    connectionStatus.textContent = "Pair with ChordSense to manage songs.";
+    connectionStatus.textContent = "Pair with ChordSense to manage songs and recordings.";
     connectionStatus.classList.remove("connected", "error");
     libraryList.replaceChildren();
     libraryEmpty.classList.add("hidden");

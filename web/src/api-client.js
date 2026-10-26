@@ -21,6 +21,9 @@ function productError(message, code, status) {
 export function responseError(payload, status) {
     const code = payload?.error_code;
     const messages = {
+        recording_not_ready: "Stop recording before downloading. If a take remains unavailable, check it on ChordSense.",
+        recording_not_found: "A recording was removed. Refresh the recordings list and try again.",
+        recordings_empty: "No recordings are available to download yet.",
         invalid_code: "That code doesn't match. Check the six digits on ChordSense.",
         pairing_expired: "That code has expired. Show a new code on ChordSense and try again.",
         pairing_locked: "Too many incorrect codes. Show a new code on ChordSense and try again.",
@@ -67,7 +70,7 @@ export function createApiClient({ baseUrl, token = "", fetchImpl = (...args) => 
     const unauthenticatedPaths = new Set(["/api/pairing/proof", "/api/pairing/claim"]);
     return {
         endpoint(path) {
-            if (!["/health", "/api/uploads", "/api/pairing/claim", "/api/pairing/proof", "/api/pairing/logout"].includes(path) && !/^\/api\/uploads\/[^/?#]+$/.test(path)) {
+            if (!["/health", "/api/uploads", "/api/recordings", "/api/recordings/export", "/api/pairing/claim", "/api/pairing/proof", "/api/pairing/logout"].includes(path) && !/^\/api\/uploads\/[^/?#]+$/.test(path) && !/^\/api\/recordings\/[0-9]+\/audio$/.test(path)) {
                 throw new Error("Invalid song library API path.");
             }
             return `${address}${path}`;

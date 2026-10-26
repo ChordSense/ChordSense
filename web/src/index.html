@@ -9,7 +9,7 @@
         content="width=device-width, initial-scale=1.0"
     />
 
-    <title>ChordSense Song Library</title>
+    <title>ChordSense Library</title>
 
     <script id="device-bootstrap" type="application/json">{"discovery":true,"api_url":null,"context_id":null,"pairing":null}</script>
 
@@ -42,18 +42,18 @@
                 id="connection-status"
                 class="connection-status"
             >
-                Pair with ChordSense to manage songs.
+                Pair with ChordSense to manage songs and recordings.
             </div>
 
         </div>
 
         <h1>
-            Send Songs to ChordSense
+            ChordSense Library
         </h1>
 
         <p>
             Upload a song from this device.
-            It will appear in your ChordSense Library.
+            Download your guitar recordings below after pairing with ChordSense.
         </p>
 
     </header>
@@ -211,6 +211,23 @@
 
     </section>
 
+    <section class="library-section" aria-labelledby="recordings-heading">
+        <div class="section-heading">
+            <div>
+                <h2 id="recordings-heading">Guitar Recordings</h2>
+                <p>Original WAV takes from ChordSense. Stop recording, then refresh.</p>
+                <p id="recordings-count" class="muted"></p>
+            </div>
+            <div class="library-actions">
+                <button id="refresh-recordings" class="button secondary" type="button">Refresh recordings</button>
+                <button id="download-recordings" class="button primary" type="button" disabled>Download all (ZIP)</button>
+            </div>
+        </div>
+        <p>ZIP includes the original audio, recording titles, and a blank labels.csv for your verified labels. Downloads leave the originals on ChordSense.</p>
+        <p id="recordings-status" class="status-message" aria-live="polite"></p>
+        <div id="recordings-empty" class="empty-state hidden">No recordings yet. Make a take on ChordSense, stop it, then refresh.</div>
+        <div id="recordings-list" class="library-list"></div>
+    </section>
 </main>
 
 </body>

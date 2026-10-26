@@ -32,7 +32,7 @@ class PairingManagerTests(unittest.TestCase):
         self.assert_claim_error(42, 400)
         claimed = self.manager.claim("000042", ORIGIN)
         self.assertEqual(len(claimed["token"]), 43)
-        self.assertEqual(claimed["permissions"], ["uploads"])
+        self.assertEqual(claimed["permissions"], ["uploads", "recordings:read"])
         self.assertTrue(self.manager.authenticate(claimed["token"], ORIGIN))
         self.assertFalse(self.manager.authenticate(claimed["token"], "https://other.vercel.app"))
         self.assertNotIn(claimed["token"], repr(self.manager._sessions))
@@ -216,7 +216,7 @@ class PairingRouteTests(unittest.TestCase):
              patch.object(backend_app, "analyze_source") as analysis, \
              patch.object(backend_app, "get_saved_recordings") as recordings:
             for method, path in (("POST", "/begin_recording"), ("POST", "/analyze_uploaded"),
-                                 ("GET", "/api/recordings"), ("DELETE", "/api/recordings/1")):
+                                 ("POST", "/api/recordings"), ("DELETE", "/api/recordings/1")):
                 self.assertEqual(self.client.open(path, method=method, headers=headers).status_code, 403)
             capture.assert_not_called()
             analysis.assert_not_called()

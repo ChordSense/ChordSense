@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 
 from flask import jsonify, request
 
@@ -31,6 +32,8 @@ def companion_request_allowed() -> bool:
         return method in {"GET", "POST"}
     if request.path.startswith("/api/uploads/"):
         return method in {"GET", "DELETE"}
+    if request.path in {"/api/recordings", "/api/recordings/export"} or re.fullmatch(r"/api/recordings/[0-9]+/audio", request.path):
+        return method == "GET"
     if request.path in {"/api/pairing/claim", "/api/pairing/proof", "/api/pairing/logout"}:
         return method == "POST"
     return False
@@ -41,7 +44,7 @@ def pairing_manager(app):
 
 
 def install_device_access(app, manager=None) -> None:
-    """Limit paired browser access to companion library uploads.
+    """Limit paired browser access to songs and read-only recording exports.
 
     The trusted desktop connection is an unforwarded loopback request without
     an Origin header. LAN requests require an exact allowed origin and a session
@@ -62,7 +65,7 @@ def install_device_access(app, manager=None) -> None:
         if not companion_request_allowed():
             return jsonify({
                 "success": False,
-                "error": "Remote access is limited to the companion upload library.",
+                "error": "Remote access is limited to songs and recording downloads.",
             }), 403
         if not origin or origin not in allowed:
             return jsonify({"success": False, "error": "Browser origin is not allowed."}), 403
