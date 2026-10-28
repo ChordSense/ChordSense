@@ -1,779 +1,212 @@
 #!/usr/bin/env python3
-
+"""Install Python services and the native Rust UI; web/ is outside this helper's scope."""
+import argparse
+import json
 import os
 import platform
-import shlex
 import shutil
+import socket
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 import venv
 from pathlib import Path
 
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
 ROOT = Path(__file__).resolve().parent
-
 BACKEND = ROOT / "backend"
 MODEL = BACKEND / "models" / "chord-cnn-lstm-model"
 FRONTEND = ROOT / "device-ui"
-
-BACKEND_REQUIREMENTS = BACKEND / "requirements.txt"
-MODEL_REQUIREMENTS = MODEL / "requirements.txt"
-PATCH = BACKEND / "patches" / "chord-model-compat.patch"
-
 BACKEND_VENV = BACKEND / ".venv"
 MODEL_VENV = MODEL / "venv"
+PATCH = BACKEND / "patches" / "chord-model-compat.patch"
+IS_WINDOWS = platform.system() == "Windows"
+HEALTH_URL = "http://127.0.0.1:5051/health"
 
-SYSTEM = platform.system()
-IS_WINDOWS = SYSTEM == "Windows"
-IS_LINUX = SYSTEM == "Linux"
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def run(command, cwd=None, check=True):
-    """
-    Run a command and print it first.
-    """
-
-    command = [str(x) for x in command]
-
-    print()
-    print(">", " ".join(command))
-
-    return subprocess.run(
-        command,
-        cwd=cwd,
-        check=check,
-    )
+def run(command, cwd=None, **kwargs):
+    command = [str(part) for part in command]
+    print("\n>", subprocess.list2cmdline(command), flush=True)
+    return subprocess.run(command, cwd=cwd, check=True, **kwargs)
 
 
 def require_command(name):
-    """
-    Make sure an external command exists in PATH.
-    """
-
-    path = shutil.which(name)
-
-    if path is None:
-        raise RuntimeError(
-            f"Required command '{name}' was not found in PATH."
-        )
-
-    return path
+    command = shutil.which(name)
+    if command is None:
+        raise RuntimeError(f"Required command '{name}' was not found in PATH.")
+    return command
 
 
 def get_venv_python(environment):
-    """
-    Return the Python executable inside a virtual environment.
-    """
+    return environment / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
 
-    if IS_WINDOWS:
-        return environment / "Scripts" / "python.exe"
-
-    return environment / "bin" / "python"
-
-
-def create_venv(environment):
-    """
-    Create a Python virtual environment if it doesn't already exist.
-    """
-
-    python = get_venv_python(environment)
-
-    if python.exists():
-        print(f"Virtual environment already exists: {environment}")
-        return python
-
-    print(f"Creating virtual environment: {environment}")
-
-    builder = venv.EnvBuilder(
-        with_pip=True,
-        clear=False,
-    )
-
-    builder.create(environment)
-
-    if not python.exists():
-        raise RuntimeError(
-            f"Failed to create virtual environment: {environment}"
-        )
-
-    return python
-
-
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
 
 def validate_environment():
-    print("=== ChordSense Setup ===")
-    print()
-    print(f"Operating system : {SYSTEM}")
-    print(f"Python           : {sys.version.split()[0]}")
-    print(f"Repository       : {ROOT}")
+    print("=== ChordSense native Rust setup ===", flush=True)
+    print(f"Operating system: {platform.system()}\nPython: {sys.version.split()[0]}\nRepository: {ROOT}")
+    if sys.version_info[:2] != (3, 12):
+        raise RuntimeError("Setup requires Python 3.12. Run python3.12 setup.py (Linux) or a Python 3.12 interpreter on Windows.")
+    if platform.system() not in {"Windows", "Linux"}:
+        raise RuntimeError("This installation helper supports Windows and Linux.")
+    for name in ("git", "cargo", "rustc", "ffmpeg"):
+        require_command(name)
+    for path in (BACKEND / "requirements.txt", BACKEND / "serve.py", FRONTEND / "Cargo.toml", PATCH):
+        if not path.is_file():
+            raise RuntimeError(f"Required project file is missing: {path}")
+    if os.environ.get("CHORDSENSE_API_PORT", "5051") != "5051":
+        raise RuntimeError("The device interface expects API port 5051. Remove or correct CHORDSENSE_API_PORT before launching.")
 
-    if not (
-        sys.version_info.major == 3
-        and sys.version_info.minor == 12
-    ):
-        raise RuntimeError(
-            "ChordSense setup currently requires Python 3.12.\n\n"
-            "Windows:\n"
-            "  py -3.12 setup.py\n\n"
-            "Linux:\n"
-            "  python3.12 setup.py"
-        )
-
-    if not IS_WINDOWS and not IS_LINUX:
-        raise RuntimeError(
-            f"Unsupported operating system: {SYSTEM}\n"
-            "This setup script currently supports Windows and Linux."
-        )
-
-    require_command("git")
-    require_command("npm")
-
-    # Tauri requires Rust.
-    require_command("cargo")
-    require_command("rustc")
-
-    if not BACKEND.exists():
-        raise RuntimeError(
-            f"Backend directory does not exist: {BACKEND}"
-        )
-
-    if not FRONTEND.exists():
-        raise RuntimeError(
-            f"Frontend directory does not exist: {FRONTEND}"
-        )
-
-    if not BACKEND_REQUIREMENTS.exists():
-        raise RuntimeError(
-            f"Missing backend requirements file: "
-            f"{BACKEND_REQUIREMENTS}"
-        )
-
-    if not PATCH.exists():
-        raise RuntimeError(
-            f"Missing model compatibility patch: {PATCH}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Step 1: Submodules
-# ---------------------------------------------------------------------------
 
 def setup_submodules():
-    print()
-    print("[1/7] Initializing Git submodules...")
-
-    run(
-        [
-            "git",
-            "submodule",
-            "update",
-            "--init",
-            "--recursive",
-        ],
-        cwd=ROOT,
-    )
-
-    if not MODEL.exists():
-        raise RuntimeError(
-            f"Model submodule was not initialized: {MODEL}"
-        )
-
-    if not MODEL_REQUIREMENTS.exists():
-        raise RuntimeError(
-            f"Model requirements file does not exist: "
-            f"{MODEL_REQUIREMENTS}"
-        )
+    print("\n[1/7] Initializing model submodules...")
+    run(["git", "submodule", "update", "--init", "--recursive"], cwd=ROOT)
+    if not (MODEL / "requirements.txt").is_file():
+        raise RuntimeError(f"Model submodule is incomplete: {MODEL}")
 
 
-# ---------------------------------------------------------------------------
-# Step 2: Backend Python environment
-# ---------------------------------------------------------------------------
-
-def setup_backend():
-    print()
-    print("[2/7] Setting up backend Python environment...")
-
-    python = create_venv(BACKEND_VENV)
-
-    run([
-        python,
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "pip",
-    ])
-
-    run([
-        python,
-        "-m",
-        "pip",
-        "install",
-        "-r",
-        BACKEND_REQUIREMENTS,
-    ])
-
+def setup_environment(environment, requirements):
+    python = get_venv_python(environment)
+    if not python.is_file():
+        venv.EnvBuilder(with_pip=True, clear=False).create(environment)
+    else:
+        version = subprocess.check_output(
+            [str(python), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"], text=True
+        ).strip()
+        if version != "3.12":
+            raise RuntimeError(f"Existing environment {environment} uses Python {version}; create a Python 3.12 environment before continuing.")
+    run([python, "-m", "pip", "install", "--upgrade", "pip"])
+    run([python, "-m", "pip", "install", "-r", requirements])
     return python
 
-
-# ---------------------------------------------------------------------------
-# Step 3: Model Python environment
-# ---------------------------------------------------------------------------
-
-def setup_model():
-    print()
-    print("[3/7] Setting up model Python environment...")
-
-    python = create_venv(MODEL_VENV)
-
-    run([
-        python,
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "pip",
-    ])
-
-    run([
-        python,
-        "-m",
-        "pip",
-        "install",
-        "-r",
-        MODEL_REQUIREMENTS,
-    ])
-
-    return python
-
-
-# ---------------------------------------------------------------------------
-# Step 4: Hide local model venv from submodule git status
-# ---------------------------------------------------------------------------
 
 def ignore_model_venv():
-    print()
-    print("[4/7] Configuring local submodule ignores...")
-
-    result = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(MODEL),
-            "rev-parse",
-            "--git-dir",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    git_dir = Path(result.stdout.strip())
-
+    print("\n[4/7] Configuring the model environment's local Git ignore...")
+    result = subprocess.check_output(["git", "-C", str(MODEL), "rev-parse", "--git-dir"], text=True)
+    git_dir = Path(result.strip())
     if not git_dir.is_absolute():
         git_dir = (MODEL / git_dir).resolve()
+    exclude = git_dir / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    if "venv/" not in existing.splitlines():
+        with exclude.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(("\n" if existing and not existing.endswith("\n") else "") + "venv/\n")
 
-    info_dir = git_dir / "info"
-    info_dir.mkdir(parents=True, exist_ok=True)
-
-    exclude_file = info_dir / "exclude"
-
-    existing = ""
-
-    if exclude_file.exists():
-        existing = exclude_file.read_text(
-            encoding="utf-8",
-            errors="ignore",
-        )
-
-    existing_lines = {
-        line.strip()
-        for line in existing.splitlines()
-        if line.strip()
-    }
-
-    if "venv/" not in existing_lines:
-        with exclude_file.open(
-            "a",
-            encoding="utf-8",
-            newline="\n",
-        ) as file:
-            if existing and not existing.endswith("\n"):
-                file.write("\n")
-
-            file.write("venv/\n")
-
-        print(
-            "Added venv/ to the model submodule's "
-            "local exclude list."
-        )
-    else:
-        print("Model venv is already locally ignored.")
-
-
-# ---------------------------------------------------------------------------
-# Step 5: Apply model compatibility patch
-# ---------------------------------------------------------------------------
 
 def apply_model_patch():
-    print()
-    print("[5/7] Applying model compatibility patch...")
+    print("\n[5/7] Applying model compatibility patch...")
+    base = ["git", "-C", str(MODEL), "apply"]
+    if subprocess.run(base + ["--check", str(PATCH)], capture_output=True).returncode == 0:
+        run(base + [PATCH])
+    elif subprocess.run(base + ["--reverse", "--check", str(PATCH)], capture_output=True).returncode != 0:
+        raise RuntimeError("The model compatibility patch does not apply cleanly. Preserve local model changes and resolve them before continuing.")
+    else:
+        print("Model patch is already applied.")
 
-    check = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(MODEL),
-            "apply",
-            "--check",
-            str(PATCH),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-    if check.returncode == 0:
-        run([
-            "git",
-            "-C",
-            MODEL,
-            "apply",
-            PATCH,
-        ])
-
-        print("Model compatibility patch applied.")
-        return
-
-    # If normal application fails, check if it is already applied.
-    reverse_check = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(MODEL),
-            "apply",
-            "--reverse",
-            "--check",
-            str(PATCH),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-    if reverse_check.returncode == 0:
-        print("Model compatibility patch is already applied.")
-        return
-
-    raise RuntimeError(
-        "The model compatibility patch does not apply cleanly.\n"
-        "The model submodule may be modified or checked out "
-        "at an unexpected commit."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Step 6: Frontend dependencies
-# ---------------------------------------------------------------------------
 
 def setup_frontend():
-    print()
-    print("[6/7] Installing frontend dependencies...")
-
-    npm = require_command("npm")
-
-    run(
-        [
-            npm,
-            "install",
-        ],
-        cwd=FRONTEND,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Step 7A: Windows terminals
-# ---------------------------------------------------------------------------
-
-def open_windows_terminals():
-    """
-    Open two separate PowerShell consoles.
-
-    Backend:
-        - Opens in backend/
-        - Activates backend/.venv
-        - Waits for Enter
-        - Runs python app.py
-
-    Frontend:
-        - Opens in device-ui/
-        - Waits for Enter
-        - Runs npm run tauri dev
-    """
-
-    powershell = (
-        shutil.which("pwsh")
-        or shutil.which("powershell")
-    )
-
-    if powershell is None:
-        raise RuntimeError(
-            "PowerShell could not be found."
-        )
-
-    backend_activate = (
-        BACKEND_VENV
-        / "Scripts"
-        / "Activate.ps1"
-    )
-
-    backend_command = (
-        f'Set-Location -LiteralPath "{BACKEND}"; '
-        f'& "{backend_activate}"; '
-        'Write-Host ""; '
-        'Write-Host '
-        '"ChordSense Backend Ready" '
-        '-ForegroundColor Green; '
-        'Write-Host ""; '
-        'Read-Host '
-        '"Press ENTER to start python app.py"; '
-        'python app.py'
-    )
-
-    frontend_command = (
-        f'Set-Location -LiteralPath "{FRONTEND}"; '
-        'Write-Host ""; '
-        'Write-Host '
-        '"ChordSense Frontend Ready" '
-        '-ForegroundColor Green; '
-        'Write-Host ""; '
-        'Read-Host '
-        '"Press ENTER to start npm run tauri dev"; '
-        'npm run tauri dev'
-    )
-
-    subprocess.Popen(
-        [
-            powershell,
-            "-NoExit",
-            "-Command",
-            backend_command,
-        ],
-        creationflags=subprocess.CREATE_NEW_CONSOLE,
-    )
-
-    subprocess.Popen(
-        [
-            powershell,
-            "-NoExit",
-            "-Command",
-            frontend_command,
-        ],
-        creationflags=subprocess.CREATE_NEW_CONSOLE,
-    )
+    print("\n[6/7] Building the native Rust device interface...")
+    # Cargo reports the executable location, including a custom target directory.
+    command = ["cargo", "build", "--locked", "--manifest-path", str(FRONTEND / "Cargo.toml"), "--message-format=json-render-diagnostics"]
+    print("\n>", subprocess.list2cmdline(command), flush=True)
+    result = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, text=True)
+    executable = None
+    for line in result.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if message.get("reason") == "compiler-message":
+            rendered = message.get("message", {}).get("rendered")
+            if rendered:
+                print(rendered, file=sys.stderr, end="")
+        if message.get("reason") == "compiler-artifact" and message.get("target", {}).get("name") == "device-ui" and message.get("executable"):
+            executable = Path(message["executable"])
+    result.check_returncode()
+    if executable is None or not executable.is_file():
+        raise RuntimeError("Cargo completed without reporting the device-ui executable.")
+    return executable
 
 
-# ---------------------------------------------------------------------------
-# Step 7B: Linux terminals
-# ---------------------------------------------------------------------------
-
-def find_linux_terminal():
-    """
-    Find a supported Linux graphical terminal emulator.
-    """
-
-    terminals = [
-        "gnome-terminal",
-        "konsole",
-        "xfce4-terminal",
-        "mate-terminal",
-        "lxterminal",
-        "xterm",
-    ]
-
-    for name in terminals:
-        path = shutil.which(name)
-
-        if path:
-            return name, path
-
-    return None, None
-
-
-def spawn_linux_terminal(title, command):
-    """
-    Open one Linux terminal window and execute a bash command.
-    """
-
-    terminal_name, terminal = find_linux_terminal()
-
-    if terminal is None:
+def healthy_backend():
+    try:
+        with urllib.request.urlopen(HEALTH_URL, timeout=1) as response:
+            body = json.load(response)
+            return body.get("success") is True and body.get("message") == "ChordSense device API running"
+    except (OSError, ValueError, urllib.error.URLError):
         return False
 
-    # GNOME Terminal
-    if terminal_name == "gnome-terminal":
-        subprocess.Popen([
-            terminal,
-            "--title",
-            title,
-            "--",
-            "bash",
-            "-lc",
-            command,
-        ])
-        return True
 
-    # KDE Konsole
-    if terminal_name == "konsole":
-        subprocess.Popen([
-            terminal,
-            "--new-tab",
-            "-p",
-            f"tabtitle={title}",
-            "-e",
-            "bash",
-            "-lc",
-            command,
-        ])
-        return True
+def launch(executable, python, windowed=False):
+    print("\n[7/7] Starting ChordSense...")
+    backend_process = None
+    log = None
+    try:
+        if healthy_backend():
+            print("Using the ChordSense backend already listening on port 5051.")
+        else:
+            with socket.socket() as probe:
+                if probe.connect_ex(("127.0.0.1", 5051)) == 0:
+                    raise RuntimeError("Port 5051 is occupied by a service that did not return ChordSense health. Stop that service first.")
+            runtime = ROOT / "runtime"
+            runtime.mkdir(exist_ok=True)
+            log_path = runtime / "startup.log"
+            log = log_path.open("a", encoding="utf-8")
+            backend_process = subprocess.Popen(
+                [str(python), "serve.py"], cwd=BACKEND, stdout=log, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+            )
+            deadline = time.monotonic() + 30
+            while not healthy_backend():
+                if backend_process.poll() is not None:
+                    raise RuntimeError(f"Backend exited during startup. See {log_path}")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"Backend did not become healthy. See {log_path}")
+                time.sleep(0.25)
+        print("Backend is ready. Opening the native interface. Close the app to stop this launch.")
+        # Argument arrays avoid shell interpretation and PowerShell activation policies.
+        run([executable] + (["--windowed"] if windowed else []), cwd=FRONTEND)
+    finally:
+        # Never stop a backend that was running before this helper launched.
+        if backend_process is not None and backend_process.poll() is None:
+            backend_process.terminate()
+            try:
+                backend_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                backend_process.kill()
+                backend_process.wait()
+        if log is not None:
+            log.close()
 
-    # XFCE Terminal
-    if terminal_name == "xfce4-terminal":
-        subprocess.Popen([
-            terminal,
-            "--title",
-            title,
-            "--command",
-            f"bash -lc {shlex.quote(command)}",
-        ])
-        return True
-
-    # MATE Terminal
-    if terminal_name == "mate-terminal":
-        subprocess.Popen([
-            terminal,
-            "--title",
-            title,
-            "--",
-            "bash",
-            "-lc",
-            command,
-        ])
-        return True
-
-    # LXTerminal
-    if terminal_name == "lxterminal":
-        subprocess.Popen([
-            terminal,
-            "--title",
-            title,
-            "-e",
-            f"bash -lc {shlex.quote(command)}",
-        ])
-        return True
-
-    # xterm
-    if terminal_name == "xterm":
-        subprocess.Popen([
-            terminal,
-            "-T",
-            title,
-            "-e",
-            "bash",
-            "-lc",
-            command,
-        ])
-        return True
-
-    return False
-
-
-def open_linux_terminals():
-    """
-    Open two separate Linux terminal windows.
-
-    Behavior mirrors Windows:
-        - One backend terminal
-        - One frontend terminal
-        - Each waits for Enter before starting
-    """
-
-    if (
-        not os.environ.get("DISPLAY")
-        and not os.environ.get("WAYLAND_DISPLAY")
-    ):
-        print()
-        print(
-            "No graphical Linux session detected."
-        )
-        print_manual_start_commands()
-        return
-
-    backend_command = (
-        f'cd {shlex.quote(str(BACKEND))}; '
-        'source .venv/bin/activate; '
-        'printf "\\n"; '
-        'printf "\\033[32mChordSense Backend Ready\\033[0m\\n"; '
-        'printf "\\n"; '
-        'read -r -p '
-        '"Press ENTER to start python app.py"; '
-        'python app.py; '
-        'printf "\\n"; '
-        'read -r -p '
-        '"Backend exited. Press ENTER to close."'
-    )
-
-    frontend_command = (
-        f'cd {shlex.quote(str(FRONTEND))}; '
-        'printf "\\n"; '
-        'printf "\\033[32mChordSense Frontend Ready\\033[0m\\n"; '
-        'printf "\\n"; '
-        'read -r -p '
-        '"Press ENTER to start npm run tauri dev"; '
-        'npm run tauri dev; '
-        'printf "\\n"; '
-        'read -r -p '
-        '"Frontend exited. Press ENTER to close."'
-    )
-
-    backend_opened = spawn_linux_terminal(
-        "ChordSense Backend",
-        backend_command,
-    )
-
-    frontend_opened = spawn_linux_terminal(
-        "ChordSense Frontend",
-        frontend_command,
-    )
-
-    if not backend_opened or not frontend_opened:
-        print()
-        print(
-            "Could not find a supported Linux terminal emulator."
-        )
-
-        print_manual_start_commands()
-
-
-# ---------------------------------------------------------------------------
-# Manual fallback
-# ---------------------------------------------------------------------------
-
-def print_manual_start_commands():
-    print()
-    print("Open two terminals manually.")
-    print()
-
-    if IS_WINDOWS:
-        print("Backend:")
-        print(r"  cd backend")
-        print(r"  .\.venv\Scripts\Activate.ps1")
-        print(r"  python app.py")
-        print()
-
-        print("Frontend:")
-        print(r"  cd device-ui")
-        print(r"  npm run tauri dev")
-
-    else:
-        print("Backend:")
-        print(f"  cd {BACKEND}")
-        print("  source .venv/bin/activate")
-        print("  python app.py")
-        print()
-
-        print("Frontend:")
-        print(f"  cd {FRONTEND}")
-        print("  npm run tauri dev")
-
-
-# ---------------------------------------------------------------------------
-# Open terminals
-# ---------------------------------------------------------------------------
-
-def open_ready_terminals():
-    print()
-    print("[7/7] Opening backend and frontend terminals...")
-
-    if IS_WINDOWS:
-        open_windows_terminals()
-        return
-
-    if IS_LINUX:
-        open_linux_terminals()
-        return
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--no-launch", action="store_true", help="Install and build without starting the backend or UI.")
+    parser.add_argument("--windowed", action="store_true", help="Launch in a window instead of fullscreen.")
+    args = parser.parse_args()
     validate_environment()
-
     setup_submodules()
-
-    setup_backend()
-
-    setup_model()
-
+    print("\n[2/7] Installing backend dependencies...")
+    python = setup_environment(BACKEND_VENV, BACKEND / "requirements.txt")
+    print("\n[3/7] Installing offline model dependencies...")
+    setup_environment(MODEL_VENV, MODEL / "requirements.txt")
     ignore_model_venv()
-
     apply_model_patch()
-
-    setup_frontend()
-
-    print()
-    print("========================================")
-    print("ChordSense installation is complete.")
-    print("========================================")
-
-    open_ready_terminals()
-
-    print()
-    print("Backend and frontend terminals are ready.")
-    print()
-    print("Backend:")
-    print("  Press ENTER to run: python app.py")
-    print()
-    print("Frontend:")
-    print("  Press ENTER to run: npm run tauri dev")
-    print()
+    run([python, "-c", "import flask, waitress, librosa; from app import app; print('Backend import check passed.')"], cwd=BACKEND)
+    executable = setup_frontend()
+    print(f"\nInstallation and build completed: {executable}")
+    print("Pi recording and live feedback still require its configured iod service and recording model hardware.")
+    if not args.no_launch:
+        launch(executable, python, args.windowed)
 
 
 if __name__ == "__main__":
     try:
         main()
-
-    except subprocess.CalledProcessError as exc:
-        print()
-        print(
-            f"Setup failed: command exited with "
-            f"code {exc.returncode}",
-            file=sys.stderr,
-        )
-
-        sys.exit(exc.returncode)
-
     except KeyboardInterrupt:
-        print()
-        print("Setup cancelled.")
+        print("\nSetup cancelled.", file=sys.stderr)
         sys.exit(130)
-
-    except Exception as exc:
-        print()
-        print(
-            f"Setup failed: {exc}",
-            file=sys.stderr,
-        )
-
+    except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
+        print(f"\nSetup failed: {error}", file=sys.stderr)
         sys.exit(1)
