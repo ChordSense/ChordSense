@@ -37,6 +37,8 @@ pub struct Services {
     shutdown: Arc<AtomicBool>,
     control_thread: Option<std::thread::JoinHandle<()>>,
     playback_thread: Option<std::thread::JoinHandle<()>>,
+    #[cfg(test)]
+    captured_requests: Option<mpsc::Sender<(String, String, Value)>>,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     audio: crate::audio::AudioWorker,
 }
@@ -164,10 +166,25 @@ impl Services {
             shutdown,
             control_thread: Some(control_thread),
             playback_thread: Some(playback_thread),
+            #[cfg(test)]
+            captured_requests: None,
         }
     }
 
+    #[cfg(test)]
+    pub fn capture_requests(&mut self) -> mpsc::Receiver<(String, String, Value)> {
+        assert!(self.shutdown());
+        let (tx, rx) = mpsc::channel();
+        self.captured_requests = Some(tx);
+        rx
+    }
+
     pub fn request(&self, tag: &str, generation: u64, method: &str, path: &str, body: Value) {
+        #[cfg(test)]
+        if let Some(tx) = &self.captured_requests {
+            let _ = tx.send((method.to_owned(), path.to_owned(), body));
+            return;
+        }
         if self.shutdown.load(Ordering::SeqCst) {
             return;
         }

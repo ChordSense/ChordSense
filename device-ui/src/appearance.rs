@@ -104,7 +104,9 @@ fn html_range(
             Sense::hover()
         },
     );
-    if enabled && (response.dragged() || response.clicked()) {
+    // Include the release event: touch devices can deliver the final movement
+    // and pointer-up together, after `dragged()` has become false.
+    if enabled && (response.dragged() || response.drag_stopped() || response.clicked()) {
         response.request_focus();
         if let Some(p) = response.interact_pointer_pos() {
             let raw = min
@@ -294,31 +296,6 @@ impl ChordSense {
                 } else {
                     y += 8.0;
                 }
-                let mut delta = 0.0;
-                for (i, title) in ["▲ Scroll up", "▼ Scroll down"].iter().enumerate() {
-                    let rect = Rect::from_min_size(
-                        pos2(r.left() + i as f32 * (r.width() + 12.0) / 2.0, y),
-                        vec2((r.width() - 12.0) / 2.0, 64.0),
-                    );
-                    if css_button(
-                        ui,
-                        rect,
-                        title,
-                        title,
-                        sans(20.0, true),
-                        paper,
-                        INK,
-                        8,
-                        1.5,
-                        true,
-                        1.0,
-                    )
-                    .clicked()
-                    {
-                        delta = if i == 0 { 250.0 } else { -250.0 };
-                    }
-                }
-                y += 74.0;
                 let actions_y = r.bottom() - 64.0;
                 let line_y = actions_y - 17.0;
                 let status_y = line_y - 18.0 - 8.0 - 10.0;
@@ -334,14 +311,17 @@ impl ChordSense {
                 ui.scope_builder(UiBuilder::new().max_rect(list), |ui| {
                     ui.set_clip_rect(list);
                     ui.spacing_mut().item_spacing.y = 10.0;
+                    // Keep the scrollbar in its own lane beside the Delete buttons.
+                    ui.spacing_mut().scroll.floating = false;
+                    ui.spacing_mut().scroll.bar_inner_margin = 12.0;
                     ScrollArea::vertical()
-                        .id_salt("library_tracks")
+                        .id_salt(("library_tracks", self.recordings))
+                        // A new touch may arrive as a mouse move from the last
+                        // touch location. That first delta is not a swipe.
+                        .drag_to_scroll(!ui.input(|i| i.pointer.any_pressed()))
                         .auto_shrink([false, false])
                         .max_height(list.height().max(30.0))
                         .show(ui, |ui| {
-                            if delta != 0.0 {
-                                ui.scroll_with_delta(vec2(0.0, delta));
-                            }
                             if rows.is_empty() {
                                 let (r, _) = ui
                                     .allocate_exact_size(vec2(list.width(), 90.0), Sense::hover());
@@ -450,6 +430,7 @@ impl ChordSense {
                                     .clicked()
                                 {
                                     self.selected = Some(i);
+                                    self.library_status.clear();
                                     self.delete = true;
                                 }
                             }
@@ -618,7 +599,7 @@ impl ChordSense {
             "pair",
             "Pair uploads",
             sans(pair_size, true),
-            CREAM,
+            blend(INK, CREAM, 0.07),
             INK,
             24,
             0.0,
@@ -631,7 +612,7 @@ impl ChordSense {
             self.pair_action("start");
         }
         if !self.focus {
-            let switch = Rect::from_center_size(r.center(), vec2(332.0, 80.0));
+            let switch = Rect::from_center_size(r.center() - vec2(0.0, 3.0), vec2(332.0, 80.0));
             ui.painter()
                 .rect_stroke(switch, 40, Stroke::new(2.0, INK), StrokeKind::Inside);
             for (i, name) in ["Play Along", "Record"].iter().enumerate() {
@@ -915,10 +896,10 @@ impl ChordSense {
         } else {
             (w * 0.45).clamp(260.0, 700.0)
         };
-        let mut pos = self.current();
+        let mut pos = self.seek_preview.unwrap_or_else(|| self.current());
         let slider = html_range(
             ui,
-            Rect::from_min_size(pos2(x, y - 24.0), vec2(timeline_w, 20.0)),
+            Rect::from_min_size(pos2(x, y - 36.0), vec2(timeline_w, 44.0)),
             "seek",
             &mut pos,
             0.0,
@@ -927,7 +908,11 @@ impl ChordSense {
             self.loaded,
             Color32::from_rgb(0, 117, 255),
         );
+        if slider.dragged() {
+            self.seek_preview = Some(pos);
+        }
         if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
+            self.seek_preview = None;
             self.seek(pos);
         }
         label_at(
@@ -1100,26 +1085,37 @@ impl ChordSense {
                 ui,
                 pos2(x, r.top() + 36.0),
                 Align2::LEFT_CENTER,
-                "Volume",
+                "Brightness",
                 sans(16.0, false),
                 INK,
             );
-            x += 65.4;
-            if html_range(
+            x += 96.0;
+            let (minimum, maximum) = self.backlight.as_ref()
+                .map_or((0.0, 1.0), |panel| (panel.minimum() as f64, panel.maximum as f64));
+            let brightness_slider = html_range(
                 ui,
-                Rect::from_min_size(pos2(x, r.top() + 26.0), vec2(129.0, 20.0)),
-                "volume",
-                &mut self.volume,
-                0.0,
+                Rect::from_min_size(pos2(x, r.top() + 26.0), vec2(98.4, 20.0)),
+                "brightness",
+                &mut self.brightness,
+                minimum,
+                maximum,
                 1.0,
-                0.01,
-                true,
+                self.backlight.is_some(),
                 Color32::from_rgb(0, 117, 255),
-            )
-            .changed()
-            {
-                self.playback("volume", json!({"volume":self.volume}));
+            );
+            if brightness_slider.changed() {
+                if let Some(panel) = &mut self.backlight {
+                    if let Err(error) = panel.set(self.brightness) {
+                        self.status = format!("Could not change screen brightness: {error}");
+                    }
+                    self.brightness = panel.current as f64;
+                }
             }
+            brightness_slider.on_hover_text(if self.backlight.is_some() {
+                format!("Screen brightness: {:.0}%", self.brightness / maximum * 100.0)
+            } else {
+                "Brightness control is unavailable for this display.".into()
+            });
             self.capo_at(
                 ui,
                 Rect::from_min_size(
@@ -1189,19 +1185,8 @@ impl ChordSense {
             );
             ui.add_space(4.0);
         }
-        let area_h = if self.focus {
-            ui.available_height().max(250.0)
-        } else if self.timeline.is_empty() {
-            if h <= 800.0 {
-                300.0
-            } else {
-                (h * 0.42).clamp(220.0, 520.0)
-            }
-        } else if h <= 850.0 {
-            (h * 0.5).clamp(380.0, 520.0)
-        } else {
-            (h * 0.58).clamp(490.0, 710.0)
-        };
+        // Controls take their space first; the chord field fills the remainder.
+        let area_h = ui.available_height().max(0.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, area_h), Sense::hover());
         if self.timeline.is_empty() {
             let fs = (w * 0.032).clamp(28.0, 54.0);
@@ -1240,7 +1225,9 @@ impl ChordSense {
             (w * 0.28).min(h * 0.44).clamp(280.0, 410.0)
         } else {
             (w * 0.27).min(h * 0.44).clamp(340.0, 500.0)
-        };
+        }
+        .min(r.height())
+        .min(first_w);
         let center = if self.focus {
             pos2(r.left() + first_w / 2.0, r.center().y)
         } else {
@@ -1293,7 +1280,8 @@ impl ChordSense {
                 (halo - 96.0).max(100.0)
             } else {
                 (h * 0.39).clamp(280.0, 460.0)
-            },
+            }
+            .min(r.height()),
             diagram * 0.9,
             "NEXT",
             &names[1],
@@ -1308,7 +1296,8 @@ impl ChordSense {
                 (halo - 126.0).max(90.0)
             } else {
                 (h * 0.39).clamp(280.0, 460.0)
-            },
+            }
+            .min(r.height()),
             diagram * 0.8,
             "LATER",
             &names[2],
@@ -1489,7 +1478,7 @@ impl ChordSense {
         match self.record {
             Record::Countdown(t) => label_at(
                 ui,
-                pos2(panel.center().x, y + 100.0),
+                pos2(panel.center().x, y + 120.0),
                 Align2::CENTER_CENTER,
                 &(4 - t.elapsed().as_secs().min(3)).to_string(),
                 rakkas((w * 0.12).clamp(90.0, 170.0)),

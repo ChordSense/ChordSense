@@ -54,6 +54,8 @@ The app is fullscreen by default. The backend health endpoint is `http://127.0.0
 
 Desktop playback follows the operating system's default audio output. While a song is loaded, the player checks for changes every 500 ms and transfers playback to the new output, preserving position, volume, speed, and paused state. If the device is temporarily unavailable, it retries automatically. Alternate audio formats are tried only on the selected default device.
 
+The toolbar brightness slider controls the panel through Linux's `/sys/class/backlight` interface. It starts at the current panel setting and keeps adjustments above zero so the screen remains visible. The app user needs write access to the panel's `brightness` file (the Pi uses the `video` group). Displays without this interface show a disabled control. Audio uses full software volume for adjustment with the hardware pot; `--mute` still silences preview playback.
+
 ## Build and test
 
 ```sh

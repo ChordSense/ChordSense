@@ -133,12 +133,15 @@ pub struct ChordSense {
     name: String,
     duration: f64,
     position: f64,
+    seek_preview: Option<f64>,
     clock: Instant,
     playing: bool,
     loaded: bool,
     speed: f64,
     speed_control: f64,
     volume: f64,
+    backlight: Option<crate::backlight::Backlight>,
+    brightness: f64,
     source_gen: u64,
     playback_gen: u64,
     last_playback_action: String,
@@ -170,6 +173,7 @@ pub struct ChordSense {
     pair_deadline: Instant,
     pair_poll: Instant,
     pair_status: String,
+    pair_qr: crate::pairing_qr::WebsiteQr,
     feedback: bool,
     fb_gen: u64,
     fb_session: String,
@@ -189,6 +193,7 @@ pub struct ChordSense {
 impl ChordSense {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ctx = &cc.egui_ctx;
+        ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
         let mut fonts = FontDefinitions::default();
         fonts.font_data.insert(
             "Rakkas".into(),
@@ -263,6 +268,8 @@ impl ChordSense {
             })
             .collect();
         let (picker_tx, picker_rx) = mpsc::channel();
+        let backlight = crate::backlight::Backlight::discover();
+        let brightness = backlight.as_ref().map_or(0.0, |panel| panel.current as f64);
         let mut app = Self {
             services: Services::new(),
             busy: HashSet::new(),
@@ -276,12 +283,15 @@ impl ChordSense {
             name: "No song loaded".into(),
             duration: 0.0,
             position: 0.0,
+            seek_preview: None,
             clock: Instant::now(),
             playing: false,
             loaded: false,
             speed: 1.0,
             speed_control: 1.0,
-            volume: 0.8,
+            volume: 1.0,
+            backlight,
+            brightness,
             source_gen: 0,
             playback_gen: 0,
             last_playback_action: String::new(),
@@ -313,6 +323,7 @@ impl ChordSense {
             pair_deadline: Instant::now(),
             pair_poll: Instant::now(),
             pair_status: String::new(),
+            pair_qr: crate::pairing_qr::WebsiteQr::default(),
             feedback: false,
             fb_gen: 0,
             fb_session: String::new(),
@@ -532,6 +543,7 @@ impl ChordSense {
         self.results = false;
     }
     fn stop(&mut self) {
+        self.seek_preview = None;
         self.playback("stop", json!({}));
         self.position = 0.0;
         self.clock = Instant::now();
@@ -551,6 +563,7 @@ impl ChordSense {
     }
     fn load(&mut self, source: Value, name: String, chords: Vec<Chord>, duration: f64) {
         self.stop();
+        self.seek_preview = None;
         self.source_gen += 1;
         self.source = source;
         self.name = display_name(&name);
@@ -1005,7 +1018,10 @@ impl ChordSense {
         }
     }
     fn dialogs(&mut self, ctx: &Context) {
-        if self.library {
+        // Open child dialogs on the next frame, after the triggering tap is consumed.
+        let rename_open = self.rename;
+        let delete_open = self.delete;
+        if self.library && !rename_open && !delete_open {
             let modal = self.library_ui(ctx);
             if modal.should_close() && !self.rename && !self.delete {
                 self.library = false;
@@ -1031,7 +1047,7 @@ impl ChordSense {
                 });
             }
         }
-        if self.rename {
+        if rename_open {
             let saving = self.busy.contains("rename");
             let m=egui::Modal::new(Id::new("rename")).backdrop_color(Color32::from_black_alpha(153)).frame(Frame::new().fill(Color32::from_rgb(245,237,224)).stroke(Stroke::new(2.0,INK)).corner_radius(18).inner_margin(24)).show(ctx,|ui|{
                 ui.set_width((ctx.screen_rect().width()*0.95).min(1000.0)-52.0);
@@ -1051,11 +1067,11 @@ impl ChordSense {
                     } else if let Some(range)=input.cursor_range {self.rename_cursor=Some(range.as_ccursor_range());}
                     let mut save=input.response.lost_focus()&&ui.input(|i|i.key_pressed(Key::Enter));
                     ui.add_sized([ui.available_width(),24.0],Label::new(RichText::new(&self.library_status).color(Color32::from_rgb(163,40,40))));
-                    ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+                    ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
                         if ui.add_enabled(!self.rename_text.trim().is_empty(),Button::new(RichText::new("Save").color(PAPER)).fill(INK)).clicked(){save=true;}
                         if ui.button("Cancel").clicked(){self.rename=false;}
                         if ui.button("Keyboard").clicked(){self.keyboard=!self.keyboard;if self.keyboard{input.response.surrender_focus();}else{input.response.request_focus();}}
-                    });
+                    }); });
                     let mut edit:Option<(String,bool)>=None;
                     if self.keyboard {
                         for row in ["1234567890","qwertyuiop","asdfghjkl","zxcvbnm"] {
@@ -1065,7 +1081,7 @@ impl ChordSense {
                             if ui.button("Shift").clicked(){self.shift=!self.shift;}
                             if ui.button("Space").clicked(){edit=Some((" ".into(),false));}
                             for ch in ["-","'","."] {if ui.button(ch).clicked(){edit=Some((ch.into(),false));}}
-                            if ui.button("⌫").clicked(){edit=Some((String::new(),true));}
+                            if ui.button("Del").clicked(){edit=Some((String::new(),true));}
                         });
                     }
                     if let Some((insert,backspace))=edit {
@@ -1090,7 +1106,7 @@ impl ChordSense {
                 self.rename = false;
             }
         }
-        if self.delete {
+        if delete_open {
             let m = egui::Modal::new(Id::new("delete"))
                 .frame(
                     Frame::new()
@@ -1102,14 +1118,16 @@ impl ChordSense {
                 .show(ctx, |ui| {
                     ui.set_width(420.0_f32.min(ctx.screen_rect().width() * 0.9) - 56.0);
                     ui.spacing_mut().item_spacing = vec2(12.0, 16.0);
+                    ui.spacing_mut().interact_size.y = 64.0;
                     ui.heading("Delete recording?");
+                    ui.colored_label(Color32::from_rgb(163, 40, 40), &self.library_status);
                     if let Some(row) = self.selection() {
                         ui.label(format!(
                             "Are you sure you want to delete {}?\nThis cannot be undone.",
                             text(&row, "name")
                         ));
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() {
+                            if button(ui, "Cancel", !self.busy.contains("delete")).clicked() {
                                 self.delete = false;
                             }
                             if button(ui, "Delete Recording", !self.busy.contains("delete"))
@@ -1120,18 +1138,78 @@ impl ChordSense {
                                     0,
                                     "DELETE",
                                     &format!("/api/recordings/{}", row["id"]),
-                                    Value::Null,
+                                    json!({}),
                                 );
                             }
                         });
                     }
                 });
-            if m.should_close() {
+            if m.should_close() && !self.busy.contains("delete") {
                 self.delete = false;
             }
         }
         if self.pairing {
-            let m=egui::Modal::new(Id::new("pairing")).backdrop_color(Color32::from_black_alpha(140)).frame(Frame::new().fill(Color32::WHITE).stroke(Stroke::new(2.0,INK)).corner_radius(20).inner_margin(24)).show(ctx,|ui|{ui.set_width(620.0_f32.min(ctx.screen_rect().width()-40.0)-52.0);ui.spacing_mut().item_spacing=vec2(12.0,16.0);ui.spacing_mut().interact_size.y=44.0;ui.horizontal(|ui|{ui.label(RichText::new("Pair uploads").font(sans(28.0,true)));ui.with_layout(Layout::right_to_left(Align::Center),|ui|{if ui.add_sized([44.0,44.0],Button::new(RichText::new("×").size(26.0))).clicked(){self.close_pair();}});});ui.label("Open your upload website in Chrome on an Android phone or computer connected to the same Wi-Fi.");ui.strong(text(&self.pair,"website_url"));ui.label("Enter this code on the website:");ui.vertical_centered(|ui|{let code=text(&self.pair,"code");let code=if self.pair["state"]=="pending"&&code.len()==6&&code.bytes().all(|b|b.is_ascii_digit()){format!("{} {}",&code[..3],&code[3..])}else{"—".into()};ui.label(RichText::new(code).monospace().size(64.0));});ui.label(&self.pair_status);if self.pair["state"]=="pending"{ui.label(format!("Code expires in {}",time(self.pair_deadline.saturating_duration_since(Instant::now()).as_secs_f64())));}ui.horizontal_wrapped(|ui|{if button(ui,"Generate new code",!self.busy.contains("pairing")).clicked(){self.pair_action("start");}if ui.add_enabled(!self.busy.contains("pairing")&&self.pair["state"]=="pending",Button::new("Cancel pairing")).clicked(){self.pair_action("cancel");}if ui.add_enabled(!self.busy.contains("pairing"),Button::new("Disconnect all")).clicked(){self.pair_action("revoke");}});ui.label("Closing this panel cancels an unused code. Disconnect all ends every paired browser session.");});
+            let compact = ctx.screen_rect().height() < 700.0;
+            let margin = if compact { 20.0 } else { 24.0 };
+            let m = egui::Modal::new(Id::new("pairing"))
+                .backdrop_color(Color32::from_black_alpha(140))
+                .frame(Frame::new().fill(Color32::WHITE).stroke(Stroke::new(2.0, INK))
+                    .corner_radius(20).inner_margin(margin))
+                .show(ctx, |ui| {
+                    ui.set_width((ctx.screen_rect().width() - 40.0).min(700.0) - margin * 2.0);
+                    ui.spacing_mut().item_spacing = vec2(12.0, if compact { 8.0 } else { 12.0 });
+                    ui.spacing_mut().interact_size.y = 44.0;
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Pair uploads").font(sans(28.0, true)));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add_sized([44.0, 44.0], Button::new(RichText::new("×").size(26.0))).clicked() {
+                                self.close_pair();
+                            }
+                        });
+                    });
+                    ui.label("Scan to open the website, then enter the pairing code. Keep your phone on the same Wi-Fi as ChordSense.");
+                    let website = text(&self.pair, "website_url");
+                    ui.horizontal_top(|ui| {
+                        if !website.is_empty() {
+                            self.pair_qr.show(ui, &website, if compact { 148.0 } else { 222.0 });
+                        }
+                        ui.vertical(|ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(RichText::new("Upload website").strong());
+                            if website.is_empty() {
+                                ui.label("Waiting for website link…");
+                            } else {
+                                ui.hyperlink_to(&website, &website);
+                            }
+                            ui.add_space(if compact { 4.0 } else { 16.0 });
+                            ui.label("Enter this code on the website:");
+                            let code = text(&self.pair, "code");
+                            let code = if self.pair["state"] == "pending" && code.len() == 6
+                                && code.bytes().all(|b| b.is_ascii_digit()) {
+                                format!("{} {}", &code[..3], &code[3..])
+                            } else {
+                                "—".into()
+                            };
+                            ui.label(RichText::new(code).monospace().size(if compact { 44.0 } else { 56.0 }));
+                        });
+                    });
+                    ui.label(&self.pair_status);
+                    if self.pair["state"] == "pending" {
+                        ui.label(format!("Code expires in {}", time(self.pair_deadline.saturating_duration_since(Instant::now()).as_secs_f64())));
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        if button(ui, "Generate new code", !self.busy.contains("pairing")).clicked() {
+                            self.pair_action("start");
+                        }
+                        if ui.add_enabled(!self.busy.contains("pairing") && self.pair["state"] == "pending", Button::new("Cancel pairing")).clicked() {
+                            self.pair_action("cancel");
+                        }
+                        if ui.add_enabled(!self.busy.contains("pairing"), Button::new("Disconnect all")).clicked() {
+                            self.pair_action("revoke");
+                        }
+                    });
+                    ui.label("Closing this panel cancels an unused code. Disconnect all ends every paired browser session.");
+                });
             if m.should_close() {
                 self.close_pair();
             }
@@ -1330,23 +1408,19 @@ impl eframe::App for ChordSense {
                 if self.results {
                     self.result_ui(ui);
                 } else {
-                    ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            self.header(ui, w, h);
-                            if self.record_mode {
-                                self.record_ui(ui, w, h);
-                            } else {
-                                self.play_ui(ui, w, h);
-                            }
-                        });
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    self.header(ui, w, h);
+                    if self.record_mode {
+                        self.record_ui(ui, w, h);
+                    } else {
+                        self.play_ui(ui, w, h);
+                    }
                 }
             });
         if self.fb_running && self.playing && !self.results {
             if let Some(rating) = self.rating {
                 let color = match rating {
-                    Rating::Green => Some(Color32::from_rgb(31, 222, 93)),
+                    Rating::Green => Some(Color32::from_rgb(48, 155, 80)),
                     Rating::Red => Some(Color32::from_rgb(244, 55, 55)),
                     _ => None,
                 };
@@ -1355,7 +1429,7 @@ impl eframe::App for ChordSense {
                         .layer_painter(LayerId::new(Order::Foreground, Id::new("feedback_border")));
                     p.rect_filled(screen, 0, color.linear_multiply(0.16));
                     p.rect_stroke(
-                        screen.shrink(7.0),
+                        screen,
                         0,
                         Stroke::new(14.0, color),
                         StrokeKind::Inside,
@@ -1364,6 +1438,9 @@ impl eframe::App for ChordSense {
             }
         }
         self.dialogs(ctx);
+        // Apply after widgets and dialogs so hover/text cursors cannot reveal it.
+        ctx.set_cursor_icon(CursorIcon::None);
+        ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
         if self.picker_requested && !self.picker_open {
             self.picker_requested = false;
             self.picker_open = true;
@@ -1472,3 +1549,375 @@ mod rename_tests {
 }
 
 include!("appearance.rs");
+
+#[cfg(test)]
+mod screen_tests {
+    use super::*;
+    use eframe::App;
+
+    #[test]
+    fn pi_views_fit_without_clipping_or_page_scrolling() {
+        let ctx = Context::default();
+        let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut frame = eframe::Frame::_new_kittest();
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1200.0));
+        for view in [
+            "empty", "chords", "focus", "record", "countdown", "recording", "processing", "results",
+        ] {
+            app.focus = view == "focus";
+            app.record_mode = matches!(view, "record" | "countdown" | "recording" | "processing");
+            app.results = view == "results";
+            app.record = match view {
+                "countdown" => Record::Countdown(Instant::now()),
+                "recording" => Record::Recording(Instant::now()),
+                "processing" => Record::Processing,
+                _ => Record::Idle,
+            };
+            app.timeline = if view == "empty" {
+                vec![]
+            } else {
+                ["C", "G", "Am"]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, chord)| Chord {
+                        start: i as f64 * 10.0,
+                        end: (i + 1) as f64 * 10.0,
+                        chord: (*chord).into(),
+                        confidence: 1.0,
+                    })
+                    .collect()
+            };
+            for _ in 0..2 {
+                let output = ctx.run(
+                    RawInput { screen_rect: Some(screen), ..Default::default() },
+                    |ctx| {
+                        app.update(ctx, &mut frame);
+                        assert!(
+                            screen.expand(1.0).contains_rect(ctx.used_rect()),
+                            "{view}: layout exceeds screen: {:?}", ctx.used_rect(),
+                        );
+                    },
+                );
+                for shape in output.shapes {
+                    let bounds = shape.shape.visual_bounding_rect();
+                    if bounds.is_positive() {
+                        assert!(
+                            screen.expand(1.0).contains_rect(bounds),
+                            "{view}: content exceeds screen: {bounds:?}",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn dialog_frame(app: &mut ChordSense, ctx: &Context, events: Vec<egui::Event>) -> egui::FullOutput {
+        ctx.run(RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1200.0))),
+            events,
+            ..Default::default()
+        }, |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()))
+    }
+
+    fn tap_label(app: &mut ChordSense, ctx: &Context, label: &str) {
+        let mut output = dialog_frame(app, ctx, vec![]);
+        for _ in 0..3 { output = dialog_frame(app, ctx, vec![]); }
+        let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.text() == label => Some(text.visual_bounding_rect().center()),
+            _ => None,
+        }).unwrap_or_else(|| panic!("Missing button: {label}"));
+        for pressed in [true, false] {
+            dialog_frame(app, ctx, vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
+                pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE,
+            }]);
+        }
+    }
+
+    #[test]
+    fn recording_dialogs_open_and_touch_keyboard_edits_title() {
+        let ctx = Context::default();
+        let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        // Exercise UI requests without touching recordings on a running device.
+        assert!(app.services.shutdown());
+        app.library = true;
+        app.recordings = true;
+        app.takes = vec![json!({"id": 123, "name": "Test recording", "title": "Test recording"})];
+        tap_label(&mut app, &ctx, "Delete");
+        assert!(app.delete, "Opening tap must not immediately dismiss delete dialog");
+        tap_label(&mut app, &ctx, "Cancel");
+        assert!(!app.delete);
+        app.selected = Some(0);
+        tap_label(&mut app, &ctx, "Rename");
+        assert!(app.rename);
+        tap_label(&mut app, &ctx, "Keyboard");
+        assert!(app.keyboard);
+        let output = dialog_frame(&mut app, &ctx, vec![]);
+        for shape in output.shapes {
+            let bounds = shape.shape.visual_bounding_rect();
+            if bounds.is_positive() {
+                assert!(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1200.0)).expand(1.0).contains_rect(bounds), "Keyboard outside display: {bounds:?}");
+            }
+        }
+        tap_label(&mut app, &ctx, "q");
+        assert_eq!(app.rename_text, "q");
+        tap_label(&mut app, &ctx, "Space");
+        tap_label(&mut app, &ctx, "w");
+        assert_eq!(app.rename_text, "q w");
+        tap_label(&mut app, &ctx, "Del");
+        assert_eq!(app.rename_text, "q ");
+        tap_label(&mut app, &ctx, "w");
+        tap_label(&mut app, &ctx, "Save");
+        assert!(app.busy.contains("rename"));
+        assert_eq!(app.rename_submitted.as_deref(), Some("q w"));
+    }
+
+    #[test]
+    fn recording_delete_confirmation_submits_request() {
+        let ctx = Context::default();
+        let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let requests = app.services.capture_requests();
+        app.library = true;
+        app.recordings = true;
+        app.takes = (0..26).map(|i| json!({"id": 123 + i, "name": format!("Test recording {i}")})).collect();
+        // Touchscreens can retain the location of the preceding tap as a mouse
+        // position. The new touch must not scroll the target out from under us.
+        dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(pos2(1000.0, 950.0))]);
+        tap_label(&mut app, &ctx, "Delete");
+        assert!(app.delete);
+        assert_eq!(app.selected, Some(0));
+        tap_label(&mut app, &ctx, "Delete Recording");
+        assert!(app.busy.contains("delete"));
+        let (method, path, body) = requests.try_recv().expect("delete HTTP request");
+        assert_eq!(method, "DELETE");
+        assert_eq!(path, "/api/recordings/123");
+        assert!(body.is_object(), "The API rejects JSON null: {body}");
+        assert!(requests.try_recv().is_err(), "One confirmation must send one delete");
+    }
+
+    #[test]
+    fn pairing_qr_link_and_code_fit_large_and_compact_displays() {
+        for size in [vec2(1920.0, 1200.0), vec2(800.0, 480.0)] {
+            let ctx = Context::default();
+            let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            assert!(app.services.shutdown());
+            app.pairing = true;
+            app.pair = json!({
+                "website_url": "https://chordsense-phi.vercel.app",
+                "state": "pending", "code": "123456",
+            });
+            app.pair_status = "Waiting for your browser to pair…".into();
+            app.pair_deadline = Instant::now() + Duration::from_secs(120);
+            let screen = Rect::from_min_size(Pos2::ZERO, size);
+            let mut qr_uploaded = false;
+            for _ in 0..4 {
+                let output = ctx.run(RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| app.dialogs(ctx));
+                qr_uploaded |= output.textures_delta.set.iter().any(|(_, delta)| {
+                    let size = delta.image.size();
+                    size[0] == size[1] && size[0] >= 29 && size[0] < 200
+                });
+            }
+            assert!(qr_uploaded, "The pairing dialog must upload its QR image");
+            let output = ctx.run(RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| app.dialogs(ctx));
+            for label in ["https://chordsense-phi.vercel.app", "123 456", "Generate new code", "Disconnect all"] {
+                assert!(output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == label)), "Missing {label}");
+            }
+            for shape in output.shapes {
+                let bounds = shape.shape.visual_bounding_rect();
+                if bounds.is_positive() {
+                    assert!(screen.expand(1.0).contains_rect(bounds), "Pairing dialog outside {size:?}: {bounds:?}");
+                }
+            }
+        }
+    }
+
+    fn pointer_button(pos: Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn library_scrolls_by_swiping_without_scroll_buttons() {
+        let ctx = Context::default();
+        let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        assert!(app.services.shutdown());
+        app.library = true;
+        app.recordings = true;
+        app.takes = (0..40).map(|i| json!({"id": i, "name": format!("Take {i}")})).collect();
+        let mut output = dialog_frame(&mut app, &ctx, vec![]);
+        for _ in 0..3 { output = dialog_frame(&mut app, &ctx, vec![]); }
+        let row_center = |output: &egui::FullOutput| output.shapes.iter().find_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.text() == "Take 4" => Some(t.visual_bounding_rect().center()),
+            _ => None,
+        }).expect("visible recording row");
+        assert!(!output.shapes.iter().any(|s| matches!(&s.shape,
+            Shape::Text(t) if t.galley.text().contains("Scroll up") || t.galley.text().contains("Scroll down")
+        )));
+        let start = row_center(&output);
+        dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start), pointer_button(start, true)]);
+        for distance in [30.0, 90.0, 150.0] {
+            dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start - vec2(0.0, distance))]);
+        }
+        output = dialog_frame(&mut app, &ctx, vec![]);
+        assert!(row_center(&output).y < start.y - 50.0, "Swipe must move the recording list");
+        dialog_frame(&mut app, &ctx, vec![pointer_button(start - vec2(0.0, 150.0), false)]);
+        assert!(!app.delete);
+    }
+
+    #[test]
+    fn touching_recordings_does_not_jump_to_the_previous_pointer_position() {
+        let ctx = Context::default();
+        let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        assert!(app.services.shutdown());
+        app.library = true;
+        app.recordings = true;
+        app.takes = (0..40).map(|i| json!({"id": i, "name": format!("Take {i}")})).collect();
+        let row_center = |output: &egui::FullOutput| output.shapes.iter().find_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.text() == "Take 4" => Some(t.visual_bounding_rect().center()),
+            _ => None,
+        }).expect("recording row");
+        for _ in 0..4 { dialog_frame(&mut app, &ctx, vec![]); }
+        let output = dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(pos2(1000.0, 950.0))]);
+        let start = row_center(&output);
+        dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start), pointer_button(start, true)]);
+        let output = dialog_frame(&mut app, &ctx, vec![]);
+        assert!((row_center(&output).y - start.y).abs() < 0.5, "Touch-down alone must not move the list");
+        dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start - vec2(0.0, 40.0))]);
+        let output = dialog_frame(&mut app, &ctx, vec![]);
+        assert!((row_center(&output).y - (start.y - 40.0)).abs() < 1.0, "The list must follow just this swipe's movement");
+        let end = start - vec2(0.0, 40.0);
+        dialog_frame(&mut app, &ctx, vec![pointer_button(end, false), egui::Event::PointerGone]);
+        // Start a second swipe elsewhere, as a real finger does after lifting.
+        let output = dialog_frame(&mut app, &ctx, vec![]);
+        let before = row_center(&output);
+        let next = before + vec2(0.0, 90.0);
+        dialog_frame(&mut app, &ctx, vec![egui::Event::Touch {
+            device_id: egui::TouchDeviceId(1), id: egui::TouchId(2),
+            phase: egui::TouchPhase::Start, pos: next, force: None,
+        }, egui::Event::PointerMoved(next), pointer_button(next, true)]);
+        let output = dialog_frame(&mut app, &ctx, vec![]);
+        assert!((row_center(&output).y - before.y).abs() < 0.5);
+        let moved = next - vec2(0.0, 50.0);
+        dialog_frame(&mut app, &ctx, vec![egui::Event::Touch {
+            device_id: egui::TouchDeviceId(1), id: egui::TouchId(2),
+            phase: egui::TouchPhase::Move, pos: moved, force: None,
+        }, egui::Event::PointerMoved(moved)]);
+        let output = dialog_frame(&mut app, &ctx, vec![]);
+        assert!((row_center(&output).y - (before.y - 50.0)).abs() < 1.0);
+        dialog_frame(&mut app, &ctx, vec![egui::Event::Touch {
+            device_id: egui::TouchDeviceId(1), id: egui::TouchId(2),
+            phase: egui::TouchPhase::End, pos: moved, force: None,
+        }, pointer_button(moved, false), egui::Event::PointerGone]);
+        assert!(app.selected.is_none(), "Swiping must not select a recording");
+        assert!(!app.delete, "Swiping must not open deletion");
+
+        let output = dialog_frame(&mut app, &ctx, vec![]);
+        let list_clip = output.shapes.iter().find_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.text() == "Delete" => Some(s.clip_rect),
+            _ => None,
+        }).unwrap();
+        for shape in &output.shapes {
+            if matches!(&shape.shape, Shape::Text(t) if t.galley.text().starts_with("Take "))
+                && shape.clip_rect.is_positive() {
+                assert!(list_clip.contains_rect(shape.clip_rect), "Recording title escapes the scrolling list");
+            }
+        }
+    }
+
+    #[test]
+    fn live_feedback_border_touches_all_screen_edges() {
+        let ctx = Context::default();
+        let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        assert!(app.services.shutdown());
+        app.fb_running = true;
+        app.playing = true;
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1200.0));
+        for (rating, color) in [
+            (Rating::Green, Color32::from_rgb(48, 155, 80)),
+            (Rating::Red, Color32::from_rgb(244, 55, 55)),
+        ] {
+            app.rating = Some(rating);
+            let output = dialog_frame(&mut app, &ctx, vec![]);
+            assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+                Shape::Rect(r) if r.stroke.color == color
+                    && r.stroke.width == 14.0 && r.rect == screen
+                    && r.stroke_kind == StrokeKind::Inside
+            )));
+        }
+    }
+
+    #[test]
+    fn song_seek_keeps_drag_position_and_commits_release_or_tap() {
+        for playing in [false, true] {
+            for focus in [false, true] {
+                let ctx = Context::default();
+                let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                assert!(app.services.shutdown());
+                app.loaded = true;
+                app.duration = 100.0;
+                app.position = 80.0;
+                app.playing = playing;
+                app.focus = focus;
+                let mut output = dialog_frame(&mut app, &ctx, vec![]);
+                for _ in 0..3 { output = dialog_frame(&mut app, &ctx, vec![]); }
+                let track = output.shapes.iter().find_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.fill == Color32::from_gray(239)
+                        && r.rect.width() > 250.0 => Some(r.rect),
+                    _ => None,
+                }).expect("seek track");
+                let thumb = output.shapes.iter().find_map(|s| match &s.shape {
+                    Shape::Circle(c) if c.fill == Color32::from_rgb(0, 117, 255)
+                        && track.contains(c.center) => Some(c.center),
+                    _ => None,
+                }).expect("seek thumb");
+                let point = |fraction| pos2(track.left() + 6.0 + (track.width() - 12.0) * fraction, thumb.y);
+                dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(thumb), pointer_button(thumb, true)]);
+                dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point(0.3))]);
+                assert!((app.seek_preview.expect(&format!("drag: playing={playing}, focus={focus}, thumb={thumb:?}, track={track:?}")) - 30.0).abs() < 0.01);
+                assert_eq!(app.playback_gen, 0, "Dragging should preview before submitting a seek");
+                // A playback update must not overwrite the position under the finger.
+                app.position = 85.0;
+                dialog_frame(&mut app, &ctx, vec![]);
+                assert!((app.seek_preview.unwrap() - 30.0).abs() < 0.01);
+                dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point(0.2)), pointer_button(point(0.2), false)]);
+                assert!(app.seek_preview.is_none());
+                assert!((app.position - 20.0).abs() < 0.01, "Seek must use the final release position, got {}", app.position);
+                assert_eq!(app.last_playback_action, "seek");
+                assert_eq!(app.playback_gen, 1);
+                assert_eq!(app.playing, playing);
+                for pressed in [true, false] {
+                    dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point(0.7)), pointer_button(point(0.7), pressed)]);
+                }
+                assert!((app.position - 70.0).abs() < 0.01);
+                assert_eq!(app.playback_gen, 2);
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_stays_hidden_over_buttons_and_dialogs() {
+        let ctx = Context::default();
+        let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut frame = eframe::Frame::_new_kittest();
+        for library in [false, true] {
+            app.library = library;
+            for pointer in [pos2(150.0, 270.0), pos2(1820.0, 80.0), pos2(960.0, 600.0)] {
+                for _ in 0..2 {
+                    let output = ctx.run(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1200.0))),
+                            events: vec![egui::Event::PointerMoved(pointer)],
+                            ..Default::default()
+                        },
+                        |ctx| app.update(ctx, &mut frame),
+                    );
+                    assert_eq!(output.platform_output.cursor_icon, CursorIcon::None);
+                    assert!(output.viewport_output[&ViewportId::ROOT]
+                        .commands
+                        .iter()
+                        .any(|cmd| matches!(cmd, ViewportCommand::CursorVisible(false))));
+                }
+            }
+        }
+    }
+}

@@ -4,7 +4,9 @@
 )]
 mod app;
 mod audio;
+mod backlight;
 mod domain;
+mod pairing_qr;
 mod services;
 
 fn main() -> eframe::Result {
