@@ -15,10 +15,16 @@ target/
 web/dist/
 .vercel/
 
+# JavaScript dependencies and leftovers from the retired Tauri interface
+node_modules/
+/device-ui/src-tauri/gen/
+/frontend-tauri/
+
 # Runtime / generated outputs
 runtime/
 *.log
 outputs/**/*.lab
+/backend/gstshark_*/
 
 # OS / editor
 .DS_Store

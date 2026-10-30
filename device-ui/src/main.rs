@@ -8,6 +8,7 @@ mod backlight;
 mod domain;
 mod pairing_qr;
 mod services;
+mod tuner;
 
 fn main() -> eframe::Result {
     let icon_image = image::load_from_memory(include_bytes!("assets/app-icon.png"))

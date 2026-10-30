@@ -34,6 +34,7 @@ pub struct Services {
     controls: mpsc::Sender<Request>,
     playbacks: mpsc::Sender<Request>,
     feedback_revision: Arc<AtomicU64>,
+    tuner_revision: Arc<AtomicU64>,
     shutdown: Arc<AtomicBool>,
     control_thread: Option<std::thread::JoinHandle<()>>,
     playback_thread: Option<std::thread::JoinHandle<()>>,
@@ -58,6 +59,8 @@ impl Services {
         let shutdown = Arc::new(AtomicBool::new(false));
         let event_tx = tx.clone();
         let revision = feedback_revision.clone();
+        let tuner_revision = Arc::new(AtomicU64::new(0));
+        let tune_revision = tuner_revision.clone();
         let stopping = shutdown.clone();
         let playback_tx = tx.clone();
         let playback_stopping = shutdown.clone();
@@ -92,21 +95,24 @@ impl Services {
         // ensure closing a dialog/session cannot race an in-flight start.
         let control_thread = std::thread::spawn(move || {
             let mut owns_feedback = false;
+            let mut owns_tuner = false;
             let mut owns_pairing = false;
             let mut owns_capture = false;
             for request in control_rx {
                 if let Some(ack) = &request.shutdown_ack {
                     let capture = !owns_capture || cleanup_request("/end_recording?async=1");
                     let feedback = !owns_feedback || cleanup_request("/feedback/stop");
+                    let tuner = !owns_tuner || cleanup_request("/tuner/stop");
                     let pairing = !owns_pairing || cleanup_request("/api/pairing/cancel");
-                    let _ = ack.send(capture && feedback && pairing);
+                    let _ = ack.send(capture && feedback && tuner && pairing);
                     break;
                 }
                 if stopping.load(Ordering::SeqCst) {
                     continue;
                 }
                 let unowned = (request.path == "/feedback/stop" && !owns_feedback)
-                    || (request.path == "/api/pairing/cancel" && !owns_pairing);
+                    || (request.path == "/api/pairing/cancel" && !owns_pairing)
+                    || (request.path == "/tuner/stop" && !owns_tuner);
                 let result = if unowned {
                     Ok(json!({"success":true,"state":"idle"}))
                 } else {
@@ -115,6 +121,8 @@ impl Services {
                 if result.is_ok() {
                     match request.path.as_str() {
                         "/feedback/start" => owns_feedback = true,
+                        "/tuner/start" => owns_tuner = true,
+                        "/tuner/stop" => owns_tuner = false,
                         "/feedback/stop" => owns_feedback = false,
                         "/api/pairing/start" => owns_pairing = true,
                         "/api/pairing/cancel" | "/api/pairing/revoke" => owns_pairing = false,
@@ -128,7 +136,18 @@ impl Services {
                     .ok()
                     .and_then(|v| v["session_id"].as_str())
                     .map(str::to_owned);
-                let starts_feedback = request.path == "/feedback/start";
+                let starts_live =
+                    matches!(request.path.as_str(), "/feedback/start" | "/tuner/start");
+                let kind = if request.path.starts_with("/tuner/") {
+                    "tuner"
+                } else {
+                    "feedback"
+                };
+                let revision = if kind == "tuner" {
+                    &tune_revision
+                } else {
+                    &revision
+                };
                 let generation = request.generation;
                 let current_revision = request.revision;
                 let _ = event_tx.send(Event {
@@ -136,13 +155,14 @@ impl Services {
                     generation,
                     result,
                 });
-                if starts_feedback && current_revision == revision.load(Ordering::SeqCst) {
+                if starts_live && current_revision == revision.load(Ordering::SeqCst) {
                     if let Some(session_id) = session {
                         let tx = event_tx.clone();
                         let revision = revision.clone();
                         let stopping = stopping.clone();
                         std::thread::spawn(move || {
-                            stream_feedback(
+                            stream_live(
+                                kind,
                                 tx,
                                 generation,
                                 session_id,
@@ -163,6 +183,7 @@ impl Services {
             controls,
             playbacks,
             feedback_revision,
+            tuner_revision,
             shutdown,
             control_thread: Some(control_thread),
             playback_thread: Some(playback_thread),
@@ -190,6 +211,8 @@ impl Services {
         }
         let revision = if matches!(path, "/feedback/start" | "/feedback/stop") {
             self.feedback_revision.fetch_add(1, Ordering::SeqCst) + 1
+        } else if matches!(path, "/tuner/start" | "/tuner/stop") {
+            self.tuner_revision.fetch_add(1, Ordering::SeqCst) + 1
         } else {
             self.feedback_revision.load(Ordering::SeqCst)
         };
@@ -204,6 +227,7 @@ impl Services {
         };
         if path.starts_with("/api/pairing/")
             || path.starts_with("/feedback/")
+            || path.starts_with("/tuner/")
             || path == "/begin_recording"
             || path.starts_with("/end_recording")
         {
@@ -280,6 +304,7 @@ impl Services {
             return true;
         }
         self.feedback_revision.fetch_add(1, Ordering::SeqCst);
+        self.tuner_revision.fetch_add(1, Ordering::SeqCst);
         let deadline = Instant::now() + Duration::from_secs(8);
         let (control_ack, control_done) = mpsc::channel();
         let (playback_ack, playback_done) = mpsc::channel();
@@ -366,23 +391,28 @@ fn perform(request: &Request) -> Result<Value, String> {
             .send()
             .map_err(|e| format!("Could not reach ChordSense: {e}"))?,
     );
-    if request.path == "/feedback/start"
+    let kind = if request.path == "/tuner/start" {
+        "tuner"
+    } else {
+        "feedback"
+    };
+    if matches!(request.path.as_str(), "/feedback/start" | "/tuner/start")
         && result
             .as_ref()
             .err()
-            .is_some_and(|e| e.starts_with("feedback is already "))
+            .is_some_and(|e| e.starts_with(&format!("{kind} is already ")))
     {
         checked(
             client
-                .post(format!("{BACKEND_URL}/feedback/stop"))
+                .post(format!("{BACKEND_URL}/{kind}/stop"))
                 .json(&json!({}))
                 .send()
-                .map_err(|e| format!("Could not recover previous feedback session: {e}"))?,
+                .map_err(|e| format!("Could not recover previous {kind} session: {e}"))?,
         )?;
         return checked(
             client
-                .post(format!("{BACKEND_URL}/feedback/start"))
-                .json(&json!({}))
+                .post(format!("{BACKEND_URL}/{kind}/start"))
+                .json(&request.body)
                 .send()
                 .map_err(|e| e.to_string())?,
         );
@@ -408,7 +438,8 @@ fn validate_response(status: u16, payload: Value) -> Result<Value, String> {
     Ok(payload)
 }
 
-fn stream_feedback(
+fn stream_live(
+    kind: &str,
     tx: mpsc::Sender<Event>,
     generation: u64,
     session: String,
@@ -423,7 +454,7 @@ fn stream_feedback(
     let mut after = 0;
     while active() {
         let response = client
-            .get(format!("{BACKEND_URL}/feedback/events"))
+            .get(format!("{BACKEND_URL}/{kind}/events"))
             .query(&[
                 ("session_id", session.clone()),
                 ("after", after.to_string()),
@@ -446,7 +477,7 @@ fn stream_feedback(
                             matches!(payload["status"].as_str(), Some("stopped" | "error"));
                         if tx
                             .send(Event {
-                                tag: "feedback_event".into(),
+                                tag: format!("{kind}_event"),
                                 generation,
                                 result: Ok(payload),
                             })
@@ -462,11 +493,11 @@ fn stream_feedback(
             }
             Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => {
                 let _ = tx.send(Event {
-                    tag: "feedback_event".into(),
+                    tag: format!("{kind}_event"),
                     generation,
                     result: Ok(
                         json!({"session_id":session,"type":"status","status":"error",
-                        "error":"Feedback session ended on the backend"}),
+                        "error":format!("{kind} session ended on the backend")}),
                     ),
                 });
                 return;
@@ -477,7 +508,7 @@ fn stream_feedback(
             return;
         }
         let _ = tx.send(Event {
-            tag: "feedback_event".into(),
+            tag: format!("{kind}_event"),
             generation,
             result: Ok(json!({"session_id":session,"type":"status","status":"disconnected"})),
         });

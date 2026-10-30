@@ -126,6 +126,9 @@ pub struct ChordSense {
     pending: HashMap<String, u64>,
     textures: HashMap<String, TextureHandle>,
     record_mode: bool,
+    tuner_mode: bool,
+    tuner_gen: u64,
+    tuner: crate::tuner::Tuner,
     record: Record,
     status: String,
     record_status: String,
@@ -148,6 +151,7 @@ pub struct ChordSense {
     last_poll: Instant,
     chords: Vec<Chord>,
     timeline: Vec<Chord>,
+    analysis_complete: bool,
     capo: i32,
     recommended: Option<i32>,
     focus: bool,
@@ -276,6 +280,9 @@ impl ChordSense {
             pending: HashMap::new(),
             textures,
             record_mode: false,
+            tuner_mode: false,
+            tuner_gen: 0,
+            tuner: crate::tuner::Tuner::default(),
             record: Record::Idle,
             status: String::new(),
             record_status: "Ready to record.".into(),
@@ -298,6 +305,7 @@ impl ChordSense {
             last_poll: Instant::now(),
             chords: vec![],
             timeline: vec![],
+            analysis_complete: false,
             capo: 0,
             recommended: None,
             focus: false,
@@ -565,6 +573,8 @@ impl ChordSense {
         self.stop();
         self.seek_preview = None;
         self.source_gen += 1;
+        self.pending.remove("analyze");
+        self.busy.remove("analyze");
         self.source = source;
         self.name = display_name(&name);
         self.loaded = false;
@@ -574,6 +584,7 @@ impl ChordSense {
         self.capo = 0;
         self.focus = false;
         self.results = false;
+        self.analysis_complete = !chords.is_empty();
         self.install_chords(chords, duration);
         self.status = "Loading audio…".into();
         self.library = false;
@@ -593,8 +604,11 @@ impl ChordSense {
         self.chords = chords;
     }
     fn analyze(&mut self) {
-        if self.source.is_null() {
+        if !self.loaded || self.busy.contains("analyze") {
             return;
+        }
+        if self.playing {
+            self.pause();
         }
         self.status = "Analyzing audio…".into();
         self.pending.insert("analyze".into(), self.source_gen);
@@ -615,6 +629,56 @@ impl ChordSense {
                 json!({"filename":self.source["upload"],"chord_dict":"submission"}),
             );
         }
+    }
+    fn change_mode(&mut self, mode: usize) {
+        self.stop();
+        if self.tuner_mode {
+            self.tuner_gen += 1;
+            self.request(
+                "tuner_stop",
+                self.tuner_gen,
+                "POST",
+                "/tuner/stop",
+                json!({}),
+            );
+            self.tuner.clear();
+        }
+        self.record_mode = mode == 1;
+        self.tuner_mode = mode == 2;
+        self.focus = false;
+        self.results = false;
+        if self.tuner_mode {
+            self.start_tuner();
+        }
+    }
+    fn start_tuner(&mut self) {
+        self.tuner_gen += 1;
+        self.tuner.clear();
+        // FIFO stop/start also recovers a session left by an interrupted UI.
+        self.request(
+            "tuner_stop",
+            self.tuner_gen,
+            "POST",
+            "/tuner/stop",
+            json!({}),
+        );
+        self.request(
+            "tuner_start",
+            self.tuner_gen,
+            "POST",
+            "/tuner/start",
+            self.tuner.settings(),
+        );
+    }
+    fn configure_tuner(&mut self) {
+        self.tuner.clear_reading();
+        self.request(
+            "tuner_config",
+            self.tuner_gen,
+            "POST",
+            "/tuner/config",
+            self.tuner.settings(),
+        );
     }
     fn refresh_library(&mut self) {
         self.selected = None;
@@ -682,6 +746,9 @@ impl ChordSense {
         }) = self.services.rx.try_recv()
         {
             retire_pending_reply(&mut self.pending, &mut self.busy, &tag, generation);
+            if tag.starts_with("tuner_") && generation != self.tuner_gen {
+                continue;
+            }
             if !current_event(
                 &tag,
                 generation,
@@ -696,6 +763,9 @@ impl ChordSense {
                 Ok(v) => v,
                 Err(e) => {
                     match tag.as_str() {
+                        tag if tag.starts_with("tuner_") => {
+                            self.tuner.fail(e);
+                        }
                         "pairing" => self.pair_status = e,
                         "files" | "recordings" | "rename" | "delete" => self.library_status = e,
                         "record_start" | "record_end" => {
@@ -726,12 +796,26 @@ impl ChordSense {
                 }
             };
             match tag.as_str() {
+                "tuner_start" => {
+                    self.tuner.session = text(&v, "session_id");
+                    self.tuner.quality = "listening".into();
+                }
+                "tuner_event" => {
+                    if v["session_id"].as_str() == Some(&self.tuner.session) {
+                        self.tuner.observe(&v, now_ms());
+                    }
+                }
                 "loaded" => {
                     self.loaded = true;
                     self.duration = num(&v, "duration").max(self.duration);
                     self.timeline = build_chord_timeline(&self.chords, self.duration);
                     self.position = 0.0;
-                    self.status = "Audio loaded.".into();
+                    self.status = if self.chords.is_empty() {
+                        "Song not analyzed yet. Tap Analyze to find the chords."
+                    } else {
+                        "Audio loaded."
+                    }
+                    .into();
                     self.playback("volume", json!({"volume":self.volume}));
                 }
                 "playback" | "poll" => {
@@ -801,6 +885,7 @@ impl ChordSense {
                     }
                 }
                 "analyze" => {
+                    self.analysis_complete = true;
                     let chords: Vec<Chord> =
                         serde_json::from_value(v["chords"].clone()).unwrap_or_default();
                     self.status = format!("Analysis complete. {} chords found.", chords.len());
@@ -1381,8 +1466,11 @@ impl eframe::App for ChordSense {
         if !ctx.wants_keyboard_input() && !self.library && !self.pairing && !self.results {
             ctx.input(|i| {
                 if i.key_pressed(Key::M) && self.record == Record::Idle {
-                    self.stop();
-                    self.record_mode = !self.record_mode;
+                    self.change_mode(if self.tuner_mode || self.record_mode {
+                        0
+                    } else {
+                        1
+                    });
                 }
                 if i.key_pressed(Key::Escape) {
                     self.focus = false;
@@ -1410,7 +1498,9 @@ impl eframe::App for ChordSense {
                 } else {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     self.header(ui, w, h);
-                    if self.record_mode {
+                    if self.tuner_mode {
+                        self.tuner_ui(ui);
+                    } else if self.record_mode {
                         self.record_ui(ui, w, h);
                     } else {
                         self.play_ui(ui, w, h);
@@ -1428,12 +1518,7 @@ impl eframe::App for ChordSense {
                     let p = ctx
                         .layer_painter(LayerId::new(Order::Foreground, Id::new("feedback_border")));
                     p.rect_filled(screen, 0, color.linear_multiply(0.16));
-                    p.rect_stroke(
-                        screen,
-                        0,
-                        Stroke::new(14.0, color),
-                        StrokeKind::Inside,
-                    );
+                    p.rect_stroke(screen, 0, Stroke::new(14.0, color), StrokeKind::Inside);
                 }
             }
         }
@@ -1456,7 +1541,10 @@ impl eframe::App for ChordSense {
             });
         }
         ctx.request_repaint_after(Duration::from_millis(
-            if self.playing || matches!(self.record, Record::Recording(_) | Record::Countdown(_)) {
+            if self.tuner_mode
+                || self.playing
+                || matches!(self.record, Record::Recording(_) | Record::Countdown(_))
+            {
                 16
             } else {
                 100
@@ -1630,6 +1718,101 @@ mod screen_tests {
             dialog_frame(app, ctx, vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
                 pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE,
             }]);
+        }
+    }
+
+    #[test]
+    fn analyze_prompt_pauses_preview_and_submits_once() {
+        let ctx = Context::default();
+        let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let requests = app.services.capture_requests();
+        app.source = json!({"upload":"example.wav"});
+        app.loaded = true;
+        app.duration = 120.0;
+        app.playing = true;
+        tap_label(&mut app, &ctx, "Analyze song");
+        assert!(!app.playing);
+        assert!(app.busy.contains("analyze"));
+        app.analyze();
+        let calls: Vec<_> = requests.try_iter().collect();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(_, p, _)| p == "/analyze_uploaded")
+                .count(),
+            1
+        );
+        assert!(calls.iter().any(|(_, p, _)| p == "/playback/pause"));
+    }
+
+    #[test]
+    fn tuner_mode_stops_audio_and_releases_input_before_recording() {
+        let ctx = Context::default();
+        let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let requests = app.services.capture_requests();
+        app.playing = true;
+        tap_label(&mut app, &ctx, "Tune");
+        assert!(app.tuner_mode);
+        assert!(!app.playing);
+        tap_label(&mut app, &ctx, "E2");
+        assert_eq!(app.tuner.target(), Some(40));
+        tap_label(&mut app, &ctx, "Record");
+        assert!(!app.tuner_mode);
+        assert!(app.record_mode);
+        let calls: Vec<_> = requests.try_iter().collect();
+        let start = calls
+            .iter()
+            .position(|(_, p, _)| p == "/tuner/start")
+            .unwrap();
+        let stop = calls
+            .iter()
+            .rposition(|(_, p, _)| p == "/tuner/stop")
+            .unwrap();
+        assert!(stop > start);
+        assert!(calls
+            .iter()
+            .any(|(_, p, b)| p == "/tuner/config" && b["target_midi"] == 40));
+    }
+
+    #[test]
+    fn tuner_and_analysis_prompt_fit_supported_screen_sizes() {
+        for size in [
+            vec2(800.0, 480.0),
+            vec2(1280.0, 800.0),
+            vec2(1920.0, 1200.0),
+        ] {
+            let ctx = Context::default();
+            let mut app = ChordSense::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            let _requests = app.services.capture_requests();
+            let screen = Rect::from_min_size(Pos2::ZERO, size);
+            for view in ["prompt", "analyzing", "tuner", "tuner-error"] {
+                app.loaded = true;
+                app.tuner_mode = view.starts_with("tuner");
+                if view == "analyzing" {
+                    app.pending.insert("analyze".into(), app.source_gen);
+                }
+                if view == "tuner-error" {
+                    app.tuner.fail("Disconnected".into());
+                }
+                for _ in 0..2 {
+                    let output = ctx.run(
+                        RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+                    );
+                    for shape in output.shapes {
+                        let bounds = shape.shape.visual_bounding_rect();
+                        if bounds.is_positive() {
+                            assert!(
+                                screen.expand(1.0).contains_rect(bounds),
+                                "{size:?} {view}: {bounds:?}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

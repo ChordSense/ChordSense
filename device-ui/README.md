@@ -2,7 +2,7 @@
 
 `device-ui` is a native Rust desktop application built with eframe/egui. It draws its interface directly and uses the existing chord diagrams, icons and Rakkas typeface. It does not load a web page, embed a webview, execute JavaScript, or require Node/npm. The separate `web/` companion website is unchanged.
 
-The Python backend is still required at `http://127.0.0.1:5051`. Its API, model environments, recording library and upload pairing protocol remain the same. Windows/macOS playback uses the computer's audio output. On Linux/Pi, audio playback, recording and live input use the existing `iod` service. Recording inference still needs the configured backend model/hardware; this migration does not turn a Windows microphone into the Pi capture device.
+The Python backend is still required at `http://127.0.0.1:5051`. Its API, model environments, recording library and upload pairing protocol remain the same. Windows/macOS playback uses the computer's audio output. On Linux/Pi, audio playback, recording and live input use the existing `iod` service. The **Tune** mode reads the same guitar input through the Python tuner API. Recording inference still needs the configured backend model/hardware; this migration does not turn a Windows microphone into the Pi capture device.
 
 ## Prerequisites
 
@@ -68,3 +68,13 @@ With Cargo's default target directory the executable is `device-ui/target/releas
 The backend stays a separate service. Unit tests and a Windows preview do not establish that ADC capture, DAC audio, live recognition and touchscreen behavior work on the Pi; use the migration checklist for that device validation.
 
 For a developer preview using existing analysis, append `-- --windowed --mute --audio /absolute/path/song.mp3 --lab /absolute/path/song.lab` to the Cargo run command. Omit `--mute` for normal listening.
+
+## Analyze songs and tune your guitar
+
+After loading audio without chords, the chord area says **Song not analyzed yet** and offers **Analyze song**. The toolbar highlights **Analyze** in green with an outline on both compact and large screens. Either action pauses an active preview and starts analysis; the prompt shows progress until chords are ready. Songs with saved analysis display their chords immediately. If analysis finishes without chords, the prompt says **No chords found**.
+
+Select **Tune** beside Play Along and Record to start the guitar tuner. The native Rust screen shows the note/octave, frequency, cents meter, and flat/sharp guidance. Green indicates ±3 cents; “In tune” requires 500 ms in that band. Readings disappear after 600 ms without a clear note. Silence, clipping and connection failures have separate messages, with Retry for unavailable input.
+
+The tuner uses standard guitar tuning (E A D G B E) with a fixed A4 reference of 440 Hz. Select a string to constrain pitch detection, or **Auto** for automatic note detection. There are no alternate tuning or reference-pitch controls. Leaving Tune or closing the app releases its input stream; recording and feedback retain their existing lifecycle. The tuner runs entirely in Rust/Python with no JavaScript, Tauri or webview.
+
+Tuner backend files (`live_input_session.py`, `pitch_detection.py`, `tuner_session.py`, the updated `live_feedback_session.py` and `app.py`) must be deployed together and the API restarted alongside the rebuilt native UI. Synthetic pitch tests cover open strings, detuning, noise and weak fundamentals; physical accuracy still needs comparison with a reference tuner on the connected guitar.

@@ -529,79 +529,57 @@ impl ChordSense {
         }
     }
     fn header(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        let title_size = if self.focus {
-            (w * 0.017).clamp(24.0, 36.0)
-        } else if w <= 900.0 {
-            (w * 0.05).clamp(26.0, 40.0)
-        } else {
-            (w * 0.03).clamp(30.0, 56.0)
-        };
-        let logo_size = if self.focus {
-            (w * 0.017).clamp(22.0, 34.0)
-        } else if w <= 900.0 {
-            (w * 0.05).clamp(24.0, 38.0)
-        } else {
-            (w * 0.03).clamp(28.0, 54.0)
-        };
+        let compact = w < 1400.0;
         let header_h = if self.focus {
-            logo_size * 1.5 + 8.0
+            52.0
+        } else if compact {
+            106.0
         } else {
-            (title_size * 2.84).max(80.0)
+            100.0
         };
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), header_h), Sense::hover());
+        let top_y = if compact && !self.focus {
+            r.top() + 25.0
+        } else {
+            r.center().y
+        };
+        let font_size = if compact { 30.0 } else { 38.0 };
         label_at(
             ui,
-            pos2(r.left(), r.center().y),
+            pos2(r.left(), top_y),
             Align2::LEFT_CENTER,
-            if self.record_mode {
+            if self.tuner_mode {
+                "Mode: Tune"
+            } else if self.record_mode {
                 "Mode: Record"
             } else {
                 "Mode: Play Along"
             },
-            rakkas(title_size),
+            rakkas(font_size),
             INK,
         );
-        let pad_x = if self.focus {
-            12.0
-        } else {
-            (w * 0.018).clamp(14.0, 28.0)
-        };
-        let pad_y = if self.focus {
-            4.0
-        } else {
-            (h * 0.007).clamp(4.0, 10.0)
-        };
-        let logo_w = text_width(ui, "ChordSense", rakkas(logo_size)) + pad_x * 2.0;
-        let logo = Rect::from_center_size(
-            pos2(r.right() - logo_w / 2.0, r.center().y),
-            vec2(logo_w, logo_size * 1.5 + pad_y * 2.0),
-        );
-        ui.painter()
-            .rect_filled(logo, if self.focus { 18 } else { 28 }, Color32::BLACK);
+        let logo_w = text_width(ui, "ChordSense", rakkas(font_size)) + 28.0;
+        let logo =
+            Rect::from_center_size(pos2(r.right() - logo_w / 2.0, top_y), vec2(logo_w, 50.0));
+        ui.painter().rect_filled(logo, 24, INK);
         label_at(
             ui,
             logo.center(),
             Align2::CENTER_CENTER,
             "ChordSense",
-            rakkas(logo_size),
-            Color32::WHITE,
+            rakkas(font_size),
+            PAPER,
         );
-        let pair_size = (w * 0.01).clamp(13.0, 17.0);
-        let pair_w = text_width(ui, "Pair uploads", sans(pair_size, true))
-            + (w * 0.015).clamp(16.0, 28.0) * 2.0;
-        let pair = Rect::from_center_size(
-            pos2(logo.left() - 12.0 - pair_w / 2.0, r.center().y),
-            vec2(pair_w, 44.0),
-        );
+        let pair = Rect::from_center_size(pos2(logo.left() - 76.0, top_y), vec2(128.0, 44.0));
         if css_button(
             ui,
             pair,
             "pair",
             "Pair uploads",
-            sans(pair_size, true),
+            sans(15.0, true),
             blend(INK, CREAM, 0.07),
             INK,
-            24,
+            22,
             0.0,
             true,
             1.0,
@@ -612,29 +590,38 @@ impl ChordSense {
             self.pair_action("start");
         }
         if !self.focus {
-            let switch = Rect::from_center_size(r.center() - vec2(0.0, 3.0), vec2(332.0, 80.0));
+            let switch = Rect::from_center_size(
+                pos2(
+                    r.center().x,
+                    if compact {
+                        r.bottom() - 24.0
+                    } else {
+                        r.center().y
+                    },
+                ),
+                vec2(354.0, 48.0),
+            );
             ui.painter()
-                .rect_stroke(switch, 40, Stroke::new(2.0, INK), StrokeKind::Inside);
-            for (i, name) in ["Play Along", "Record"].iter().enumerate() {
-                let active = self.record_mode == (i == 1);
-                let rect = Rect::from_min_size(
-                    switch.min + vec2(6.0 + i as f32 * 162.0, 6.0),
-                    vec2(158.0, 68.0),
-                );
-                let rect = if active {
-                    rect.expand2(vec2(1.58, 0.68))
+                .rect_stroke(switch, 24, Stroke::new(2.0, INK), StrokeKind::Inside);
+            for (i, name) in ["Play Along", "Record", "Tune"].iter().enumerate() {
+                let active = if self.tuner_mode {
+                    i == 2
                 } else {
-                    rect
+                    self.record_mode == (i == 1) && i != 2
                 };
+                let rect = Rect::from_min_size(
+                    switch.min + vec2(4.0 + i as f32 * 116.0, 4.0),
+                    vec2(114.0, 40.0),
+                );
                 if css_button(
                     ui,
                     rect,
                     name,
                     name,
-                    sans(23.0, true),
+                    sans(18.0, true),
                     if active { INK } else { CREAM },
                     if active { CREAM } else { INK },
-                    40,
+                    22,
                     0.0,
                     self.record == Record::Idle,
                     0.35,
@@ -642,8 +629,7 @@ impl ChordSense {
                 .clicked()
                     && !active
                 {
-                    self.stop();
-                    self.record_mode = i == 1;
+                    self.change_mode(i);
                 }
             }
         }
@@ -891,7 +877,7 @@ impl ChordSense {
             "Focus View"
         };
         let focus_w = text_width(ui, focus_text, sans(fs, true)) + 56.0;
-        let timeline_w = if self.focus {
+        let timeline_w = if self.focus || w < 1100.0 {
             (r.right() - x - speed_w - focus_w - gap * 2.0).max(100.0)
         } else {
             (w * 0.45).clamp(260.0, 700.0)
@@ -992,7 +978,133 @@ impl ChordSense {
     }
     fn play_ui(&mut self, ui: &mut Ui, w: f32, h: f32) {
         let width = ui.available_width();
-        if !self.focus {
+        let analyzing = self.pending.get("analyze") == Some(&self.source_gen);
+        let needs_analysis = self.loaded && !self.analysis_complete && !analyzing;
+        if !self.focus && h <= 650.0 {
+            let (r, _) = ui.allocate_exact_size(vec2(width, 44.0), Sense::hover());
+            let green = Color32::from_rgb(36, 99, 60);
+            for (id, label, x, bw) in [
+                ("browse", "Browse Tracks", 0.0, 160.0),
+                (
+                    "analyze",
+                    if analyzing { "Analyzing…" } else { "Analyze" },
+                    168.0,
+                    112.0,
+                ),
+                (
+                    "feedback",
+                    if self.feedback {
+                        "Feedback: On"
+                    } else {
+                        "Feedback: Off"
+                    },
+                    288.0,
+                    166.0,
+                ),
+            ] {
+                let enabled = if id == "analyze" {
+                    self.loaded && !self.busy.contains("analyze")
+                } else {
+                    true
+                };
+                let highlight = id == "analyze" && needs_analysis;
+                let fill = if highlight { green } else { INK };
+                let button_rect = Rect::from_min_size(r.min + vec2(x, 0.0), vec2(bw, 44.0));
+                if highlight {
+                    ui.painter().rect_stroke(
+                        button_rect.expand(3.0),
+                        10,
+                        Stroke::new(2.0_f32, green),
+                        StrokeKind::Inside,
+                    );
+                }
+                if css_button(
+                    ui,
+                    button_rect,
+                    id,
+                    label,
+                    sans(18.0, true),
+                    fill,
+                    PAPER,
+                    8,
+                    0.0,
+                    enabled,
+                    0.4,
+                )
+                .clicked()
+                {
+                    match id {
+                        "browse" => {
+                            self.library = true;
+                            self.refresh_library();
+                        }
+                        "analyze" => self.analyze(),
+                        _ => {
+                            self.feedback = !self.feedback;
+                            if !self.feedback {
+                                self.stop_feedback();
+                            } else if self.playing {
+                                self.start_feedback();
+                            }
+                        }
+                    }
+                }
+            }
+            label_at(
+                ui,
+                pos2(r.left() + 470.0, r.center().y),
+                Align2::LEFT_CENTER,
+                "Brightness",
+                sans(14.0, false),
+                INK,
+            );
+            let (min, max) = self
+                .backlight
+                .as_ref()
+                .map_or((0.0, 1.0), |b| (b.minimum() as f64, b.maximum as f64));
+            if html_range(
+                ui,
+                Rect::from_min_max(pos2(r.left() + 552.0, r.top()), r.max),
+                "brightness",
+                &mut self.brightness,
+                min,
+                max,
+                1.0,
+                self.backlight.is_some(),
+                INK,
+            )
+            .changed()
+            {
+                if let Some(panel) = &mut self.backlight {
+                    if let Err(e) = panel.set(self.brightness) {
+                        self.status = format!("Could not change brightness: {e}");
+                    }
+                    self.brightness = panel.current as f64;
+                }
+            }
+            if !self.timeline.is_empty() {
+                ui.add_space(8.0);
+                let (r, _) = ui.allocate_exact_size(vec2(width, 64.0), Sense::hover());
+                self.capo_at(ui, Rect::from_min_size(r.min, vec2(593.813, 64.0)));
+            }
+            ui.add_space(8.0);
+            let (r, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
+            label_at(
+                ui,
+                r.left_center(),
+                Align2::LEFT_CENTER,
+                &self.status,
+                sans(13.0, false),
+                INK,
+            );
+            ui.add_space(8.0);
+            let (r, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
+            self.song_at(ui, r, w, h);
+            ui.add_space(8.0);
+            let (r, _) = ui.allocate_exact_size(vec2(width, 48.0), Sense::hover());
+            self.transport_at(ui, r, w);
+            divider(ui, 6.0);
+        } else if !self.focus {
             let gap = (w * 0.01).clamp(8.0, 18.0);
             let tools_w = 209.375 + 137.391 + 253.0 + gap * 3.0 + 12.0 + 196.375;
             let same_row = width >= tools_w + gap + 593.813;
@@ -1018,9 +1130,8 @@ impl ChordSense {
                 self.refresh_library();
             }
             x += 209.375 + gap;
-            let needs = self.loaded && self.timeline.is_empty() && !self.busy.contains("analyze");
             let ar = Rect::from_min_size(pos2(x, r.top()), vec2(137.391, 72.0));
-            if needs {
+            if needs_analysis {
                 ui.painter().rect_stroke(
                     ar.expand(6.0),
                     11,
@@ -1032,9 +1143,9 @@ impl ChordSense {
                 ui,
                 ar,
                 "analyze",
-                "Analyze",
-                sans(24.0, false),
-                if needs {
+                if analyzing { "Analyzing…" } else { "Analyze" },
+                sans(if analyzing { 20.0 } else { 24.0 }, needs_analysis),
+                if needs_analysis {
                     Color32::from_rgb(36, 99, 60)
                 } else {
                     Color32::BLACK
@@ -1042,7 +1153,7 @@ impl ChordSense {
                 Color32::WHITE,
                 8,
                 0.0,
-                self.loaded && !self.busy.contains("analyze") && !self.playing,
+                self.loaded && !self.busy.contains("analyze"),
                 0.45,
             )
             .clicked()
@@ -1090,8 +1201,9 @@ impl ChordSense {
                 INK,
             );
             x += 96.0;
-            let (minimum, maximum) = self.backlight.as_ref()
-                .map_or((0.0, 1.0), |panel| (panel.minimum() as f64, panel.maximum as f64));
+            let (minimum, maximum) = self.backlight.as_ref().map_or((0.0, 1.0), |panel| {
+                (panel.minimum() as f64, panel.maximum as f64)
+            });
             let brightness_slider = html_range(
                 ui,
                 Rect::from_min_size(pos2(x, r.top() + 26.0), vec2(98.4, 20.0)),
@@ -1112,7 +1224,10 @@ impl ChordSense {
                 }
             }
             brightness_slider.on_hover_text(if self.backlight.is_some() {
-                format!("Screen brightness: {:.0}%", self.brightness / maximum * 100.0)
+                format!(
+                    "Screen brightness: {:.0}%",
+                    self.brightness / maximum * 100.0
+                )
             } else {
                 "Brightness control is unavailable for this display.".into()
             });
@@ -1189,22 +1304,243 @@ impl ChordSense {
         let area_h = ui.available_height().max(0.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, area_h), Sense::hover());
         if self.timeline.is_empty() {
-            let fs = (w * 0.032).clamp(28.0, 54.0);
-            for (i, line) in ["Please Load a Song", "of Choice to Play", "Along to!"]
-                .iter()
-                .enumerate()
-            {
+            if self.loaded || analyzing {
+                let green = Color32::from_rgb(36, 99, 60);
+                let panel = rect.shrink2(vec2(4.0, 2.0));
+                ui.painter()
+                    .rect_filled(panel, 16, blend(green, CREAM, 0.08));
+                ui.painter()
+                    .rect_stroke(panel, 16, Stroke::new(2.0, green), StrokeKind::Inside);
+                let compact = rect.height() < 170.0;
+                let center = if compact {
+                    pos2(
+                        panel.left() + (panel.width() - 210.0) / 2.0,
+                        panel.center().y,
+                    )
+                } else {
+                    panel.center() - vec2(0.0, 35.0)
+                };
                 label_at(
                     ui,
-                    rect.center() + vec2(0.0, (i as f32 - 1.0) * fs * 1.05),
+                    center - vec2(0.0, 14.0),
                     Align2::CENTER_CENTER,
-                    line,
-                    rakkas(fs),
+                    if analyzing {
+                        "Finding the chords…"
+                    } else if self.analysis_complete {
+                        "No chords found"
+                    } else {
+                        "Song not analyzed yet"
+                    },
+                    sans(if compact { 20.0 } else { 28.0 }, true),
+                    green,
+                );
+                label_at(
+                    ui,
+                    center + vec2(0.0, 16.0),
+                    Align2::CENTER_CENTER,
+                    if analyzing {
+                        "Chords will appear here when ready."
+                    } else if self.analysis_complete {
+                        "Try analyzing the song again."
+                    } else {
+                        "Tap Analyze song to find the chords."
+                    },
+                    sans(if compact { 14.0 } else { 18.0 }, false),
+                    INK,
+                );
+                let action = Rect::from_center_size(
+                    if compact {
+                        pos2(panel.right() - 108.0, panel.center().y)
+                    } else {
+                        panel.center() + vec2(0.0, 40.0)
+                    },
+                    vec2(192.0, if compact { 44.0 } else { 52.0 }),
+                );
+                if css_button(
+                    ui,
+                    action,
+                    "analyze-prompt",
+                    if analyzing {
+                        "Analyzing…"
+                    } else {
+                        "Analyze song"
+                    },
+                    sans(20.0, true),
+                    green,
+                    Color32::WHITE,
+                    10,
+                    0.0,
+                    self.loaded && !analyzing,
+                    0.6,
+                )
+                .clicked()
+                {
+                    self.analyze();
+                }
+            } else {
+                label_at(
+                    ui,
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    if self.busy.contains("loaded") {
+                        "Loading your song…"
+                    } else {
+                        "Browse Tracks to choose a song"
+                    },
+                    rakkas((w * 0.032).clamp(24.0, 48.0)),
                     INK,
                 );
             }
         } else {
             self.chord_field(ui, rect, w, h);
+        }
+    }
+    fn tuner_ui(&mut self, ui: &mut Ui) {
+        use crate::tuner::{note, STANDARD_TUNING};
+        let (r, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+        let compact = r.height() < 440.0;
+        label_at(
+            ui,
+            pos2(r.center().x, r.top() + 22.0),
+            Align2::CENTER_CENTER,
+            "Standard tuning · E A D G B E",
+            sans(18.0, true),
+            INK,
+        );
+        let string_y = r.bottom() - 48.0;
+        let gap = 8.0;
+        let bw = (r.width() - gap * 6.0) / 7.0;
+        let now = now_ms();
+        let reading = self.tuner.display(now);
+        for i in 0..7 {
+            let string = if i == 0 { None } else { Some(i - 1) };
+            let active = self.tuner.string == string;
+            let label = string.map_or("Auto".into(), |s| note(STANDARD_TUNING[s]));
+            let rect = Rect::from_min_size(
+                pos2(r.left() + i as f32 * (bw + gap), string_y),
+                vec2(bw, 48.0),
+            );
+            if css_button(
+                ui,
+                rect,
+                &format!("tuner-string-{i}"),
+                &label,
+                sans(20.0, true),
+                if active { INK } else { PAPER },
+                if active { PAPER } else { INK },
+                12,
+                1.0,
+                true,
+                1.0,
+            )
+            .clicked()
+            {
+                self.tuner.string = string;
+                self.configure_tuner();
+            }
+        }
+        let field = Rect::from_min_max(
+            pos2(r.left(), r.top() + 54.0),
+            pos2(r.right(), string_y - 10.0),
+        );
+        let green = Color32::from_rgb(36, 130, 65);
+        let color = reading.map_or(INK, |v| {
+            if self.tuner.locked || v.cents.abs() <= 3.0 {
+                green
+            } else if v.cents.abs() <= 10.0 {
+                Color32::from_rgb(170, 105, 20)
+            } else {
+                Color32::from_rgb(185, 65, 45)
+            }
+        });
+        let note_y = field.top() + field.height() * 0.15;
+        label_at(
+            ui,
+            pos2(field.center().x, note_y),
+            Align2::CENTER_CENTER,
+            &reading.map_or("—".into(), |v| note(v.midi)),
+            rakkas(if compact { 48.0 } else { 80.0 }),
+            color,
+        );
+        label_at(
+            ui,
+            pos2(field.center().x, note_y + if compact { 32.0 } else { 55.0 }),
+            Align2::CENTER_CENTER,
+            &reading.map_or("GUITAR TUNER".into(), |v| {
+                format!("{:.2} Hz  ·  {:+.1} cents", v.hz, v.cents)
+            }),
+            sans(16.0, false),
+            INK,
+        );
+        let meter = Rect::from_center_size(
+            pos2(field.center().x, field.top() + field.height() * 0.59),
+            vec2((field.width() - 70.0).min(720.0), 32.0),
+        );
+        ui.painter().rect_filled(meter, 8, blend(INK, CREAM, 0.08));
+        ui.painter().rect_filled(
+            Rect::from_center_size(meter.center(), vec2(meter.width() * 0.06, 32.0)),
+            2,
+            blend(green, CREAM, 0.25),
+        );
+        for cents in [-50, -25, 0, 25, 50] {
+            let x = meter.center().x + cents as f32 / 100.0 * meter.width();
+            ui.painter().line_segment(
+                [pos2(x, meter.top()), pos2(x, meter.bottom())],
+                Stroke::new(1.0, blend(INK, CREAM, 0.4)),
+            );
+            label_at(
+                ui,
+                pos2(x, meter.bottom() + 12.0),
+                Align2::CENTER_CENTER,
+                &format!("{cents:+}"),
+                sans(12.0, false),
+                INK,
+            );
+        }
+        if let Some(v) = reading {
+            let x = meter.center().x + (v.cents.clamp(-50.0, 50.0) / 100.0) as f32 * meter.width();
+            ui.painter().line_segment(
+                [pos2(x, meter.top() - 8.0), pos2(x, meter.bottom() + 2.0)],
+                Stroke::new(4.0, color),
+            );
+            ui.painter()
+                .circle_filled(pos2(x, meter.top() - 8.0), 5.0, color);
+        }
+        let failed = matches!(
+            self.tuner.quality.as_str(),
+            "error" | "disconnected" | "stopped"
+        );
+        label_at(
+            ui,
+            pos2(
+                field.center().x - if failed { 50.0 } else { 0.0 },
+                field.bottom() - 18.0,
+            ),
+            Align2::CENTER_CENTER,
+            self.tuner.hint(now),
+            sans(if compact { 17.0 } else { 22.0 }, true),
+            color,
+        );
+        if failed
+            && css_button(
+                ui,
+                Rect::from_min_size(
+                    pos2(field.right() - 94.0, field.bottom() - 40.0),
+                    vec2(94.0, 40.0),
+                ),
+                "tuner-retry",
+                "Retry",
+                sans(18.0, true),
+                INK,
+                PAPER,
+                10,
+                0.0,
+                !self.busy.contains("tuner_start"),
+                0.4,
+            )
+            .clicked()
+        {
+            self.start_tuner();
         }
     }
     fn chord_field(&self, ui: &Ui, r: Rect, w: f32, h: f32) {
