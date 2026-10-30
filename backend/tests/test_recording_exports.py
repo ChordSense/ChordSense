@@ -55,6 +55,22 @@ class RecordingExportTests(unittest.TestCase):
     def get(self, path):
         return self.client.get(path, headers=self.headers)
 
+    def test_native_delete_accepts_object_body_and_removes_only_selected_recording(self):
+        removed = self.capture()
+        kept = self.capture('capture-2.wav')
+        row = next(r for r in library.list_recordings() if r['wav_path'] == str(removed))
+        endpoint = f"/api/recordings/{row['id']}"
+        rejected = self.client.delete(endpoint, data='null', content_type='application/json')
+        self.assertEqual(rejected.status_code, 400)
+        self.assertTrue(removed.exists())
+        response = self.client.delete(endpoint, json={})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['success'])
+        self.assertFalse(removed.exists())
+        self.assertTrue(kept.exists())
+        rows = self.client.get('/api/recordings').get_json()['recordings']
+        self.assertEqual([r['wav_path'] for r in rows], [str(kept)])
+
     def test_listing_and_download_preserve_original_bytes_and_hide_device_paths(self):
         path = self.capture()
         row = library.list_recordings()[0]

@@ -1,0 +1,23 @@
+[package]
+name = "device-ui"
+version = "0.2.0"
+edition = "2021"
+description = "ChordSense native Rust device interface"
+license = "MIT"
+
+[dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow", "x11", "wayland", "accesskit"] }
+egui_extras = { version = "0.31.1", features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+reqwest = { version = "0.12.28", features = ["blocking", "json", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = "0.16"
+rodio = "0.22.2"
+tempfile = "3"
+qrcode = { version = "0.14.1", default-features = false }
+
+[profile.release]
+lto = "thin"
+strip = true
+

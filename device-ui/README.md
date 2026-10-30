@@ -1,24 +1,80 @@
-# ChordSense attached-screen device app
+# ChordSense native device interface
 
-This directory contains the **Tauri app that runs on the Pi's attached screen**. It provides Play Along, Record, synchronized chord diagrams, playback controls and live feedback. It remains part of the device and is not the Vercel website.
+`device-ui` is a native Rust desktop application built with eframe/egui. It draws its interface directly and uses the existing chord diagrams, icons and Rakkas typeface. It does not load a web page, embed a webview, execute JavaScript, or require Node/npm. The separate `web/` companion website is unchanged.
 
-Tauri loads local assets from `src/` (`src-tauri/tauri.conf.json` sets `frontendDist` to `../src`). The native Rust bridge connects to the Pi backend at `http://127.0.0.1:5051`. The backend talks to `iod` over its local Unix socket for ADC capture and DAC playback. These local paths continue working without Vercel or an Internet connection; optional remote analysis requires its worker online, while cached results and unconfigured local analysis support offline use.
+The Python backend is still required at `http://127.0.0.1:5051`. Its API, model environments, recording library and upload pairing protocol remain the same. Windows/macOS playback uses the computer's audio output. On Linux/Pi, audio playback, recording and live input use the existing `iod` service. The **Tune** mode reads the same guitar input through the Python tuner API. Recording inference still needs the configured backend model/hardware; this migration does not turn a Windows microphone into the Pi capture device.
 
-With the existing Rust/Tauri and system dependencies installed, use this directory's Tauri command:
+## Prerequisites
 
-```sh
-npm run tauri dev
-npm test
+- A current Rust toolchain and Cargo.
+- Windows: the MSVC Rust toolchain and Microsoft C++ Build Tools with **Desktop development with C++**. WebView2 is not needed by this native application.
+- Linux: a working desktop session and the native window/audio build libraries for your distribution. On Debian/Ubuntu these commonly include `build-essential`, `pkg-config`, `libasound2-dev`, `libudev-dev`, `libx11-dev`, `libxi-dev`, `libxcursor-dev`, `libxrandr-dev`, `libxinerama-dev`, `libegl1-mesa-dev` and `libwayland-dev`.
+- FFmpeg in PATH for desktop playback below normal speed while preserving pitch.
+- The existing backend environment; the repository's installation helper currently requires Python 3.12.
+
+## Initial setup
+
+From the repository root:
+
+```powershell
+python setup.py
 ```
 
-For a packaged device build, use `npm run tauri build` and the existing Pi deployment process. The repository keeps this app in `device-ui/`, named for its role on the device; Tauri provides its native window and Rust bridge. The built executable is `src-tauri/target/release/device-ui`, and the packaged application is named **ChordSense**. The Pi's installed executable and service still use the older nested checkout path until a separate device migration; see the [deployment record](../docs/pi-pairing-deployment.md). Its UI user service sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` to correct the observed Pi display corruption.
+The helper initializes the model submodule, installs the backend/model Python dependencies, applies the existing model compatibility patch, checks backend imports, and builds the native interface. It starts `serve.py` with the backend virtual environment's interpreter, waits for a successful health response, then opens ChordSense. Closing the interface stops only the backend started by this helper. An already-running healthy ChordSense backend is reused and is left running.
 
-Install the updated backend and rebuilt Linux/Pi screen app together to use short-code pairing. Tap **Pair uploads** in the screen header to generate a six-digit code automatically; the dialog shows the configured companion website and countdown. The user enters that code in the website's **Pair device** form. **Generate new code** replaces an expired/locked code, **Cancel pairing** invalidates a pending code, and **Disconnect all** revokes all browser sessions. Closing the dialog cancels an unused code without disconnecting already paired browsers. Native status checks run every two seconds only while the open panel has a pending code.
+Use `python setup.py --no-launch` to install/build only, or `python setup.py --windowed` for a window instead of fullscreen. Startup logs from a backend launched by the helper go to `runtime/startup.log`. Setup does not configure the Pi's `iod` service, Hailo runtime, companion discovery credentials, or the separate website.
 
-Set the public `CHORDSENSE_COMPANION_URL` to the stable Vercel origin shown in the dialog, and put the same exact origin in `CHORDSENSE_ALLOWED_ORIGINS`. Pairing start/status/cancel/revoke calls remain on the native loopback bridge. The companion uses its configured LAN endpoint, defaulting to `http://chordsense.local:5051`, and permits every browser to attempt a connection. Allow local-network access if prompted; see [observed browser tests](../docs/browser-compatibility.md). The current campus website uses a configured private IP after `.local` resolution failed. See [backend deployment](../backend/deploy/README.md) for hostname/Avahi, environment and both API/native startup steps.
+## Subsequent launches
 
-Pi playback stays on the device DAC/headphone output. The macOS preview can use its local playback implementation for development. Screen visual updates stop while paused or hidden, and the backend serializes playback-speed rendering to avoid overlapping FFmpeg work. Publishing the companion website does not offload the attached screen's rendering or live-recognition work.
+Open two terminals at the repository root. On Windows, start the backend with:
 
-Uploaded-song analysis now passes the filename to local `/analyze_uploaded`; the native bridge no longer downloads and re-uploads audio that is already stored on the device.
+```powershell
+.\backend\.venv\Scripts\python.exe backend\serve.py
+```
 
-The separate song-manager website lives in [web/](../web/), with its architecture described in [web-device-architecture.md](../docs/web-device-architecture.md). That website replaces the Flask `/upload` page formerly served on port 5051. Its browser only uploads, lists, downloads and deletes songs; it does not replace this interface or expose Record/Play Along controls. Vercel builds `web/` only, using the repository-root configuration.
+On Linux use:
+
+```sh
+backend/.venv/bin/python backend/serve.py
+```
+
+In the other terminal:
+
+```sh
+cargo run --locked --manifest-path device-ui/Cargo.toml
+```
+
+For a windowed development preview:
+
+```sh
+cargo run --locked --manifest-path device-ui/Cargo.toml -- --windowed
+```
+
+The app is fullscreen by default. The backend health endpoint is `http://127.0.0.1:5051/health`.
+
+Desktop playback follows the operating system's default audio output. While a song is loaded, the player checks for changes every 500 ms and transfers playback to the new output, preserving position, volume, speed, and paused state. If the device is temporarily unavailable, it retries automatically. Alternate audio formats are tried only on the selected default device.
+
+The toolbar brightness slider controls the panel through Linux's `/sys/class/backlight` interface. It starts at the current panel setting and keeps adjustments above zero so the screen remains visible. The app user needs write access to the panel's `brightness` file (the Pi uses the `video` group). Displays without this interface show a disabled control. Audio uses full software volume for adjustment with the hardware pot; `--mute` still silences preview playback.
+
+## Build and test
+
+```sh
+cargo test --locked --manifest-path device-ui/Cargo.toml
+cargo build --release --locked --manifest-path device-ui/Cargo.toml
+```
+
+With Cargo's default target directory the executable is `device-ui/target/release/device-ui.exe` on Windows and `device-ui/target/release/device-ui` on Linux. Build the Linux/Pi artifact on an appropriate Linux toolchain before replacing a Pi screen launcher. Any service that previously referred to `src-tauri/target/...` must be updated to the native executable path.
+
+The backend stays a separate service. Unit tests and a Windows preview do not establish that ADC capture, DAC audio, live recognition and touchscreen behavior work on the Pi; use the migration checklist for that device validation.
+
+For a developer preview using existing analysis, append `-- --windowed --mute --audio /absolute/path/song.mp3 --lab /absolute/path/song.lab` to the Cargo run command. Omit `--mute` for normal listening.
+
+## Analyze songs and tune your guitar
+
+After loading audio without chords, the chord area says **Song not analyzed yet** and offers **Analyze song**. The toolbar highlights **Analyze** in green with an outline on both compact and large screens. Either action pauses an active preview and starts analysis; the prompt shows progress until chords are ready. Songs with saved analysis display their chords immediately. If analysis finishes without chords, the prompt says **No chords found**.
+
+Select **Tune** beside Play Along and Record to start the guitar tuner. The native Rust screen shows the note/octave, frequency, cents meter, and flat/sharp guidance. Green indicates ±3 cents; “In tune” requires 500 ms in that band. Readings disappear after 600 ms without a clear note. Silence, clipping and connection failures have separate messages, with Retry for unavailable input.
+
+The tuner uses standard guitar tuning (E A D G B E) with a fixed A4 reference of 440 Hz. Select a string to constrain pitch detection, or **Auto** for automatic note detection. There are no alternate tuning or reference-pitch controls. Leaving Tune or closing the app releases its input stream; recording and feedback retain their existing lifecycle. The tuner runs entirely in Rust/Python with no JavaScript, Tauri or webview.
+
+Tuner backend files (`live_input_session.py`, `pitch_detection.py`, `tuner_session.py`, the updated `live_feedback_session.py` and `app.py`) must be deployed together and the API restarted alongside the rebuilt native UI. Synthetic pitch tests cover open strings, detuning, noise and weak fundamentals; physical accuracy still needs comparison with a reference tuner on the connected guitar.

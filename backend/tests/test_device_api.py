@@ -396,11 +396,15 @@ class DeviceApiTests(unittest.TestCase):
             ("POST", "/end_recording"), ("POST", "/feedback/start"),
             ("POST", "/feedback/pause"), ("POST", "/feedback/resume"),
             ("POST", "/feedback/stop"), ("GET", "/feedback/events?session_id=unknown"),
-            ("GET", "/feedback/status"), ("POST", "/playback/load"),
+            ("GET", "/feedback/status"), ("POST", "/tuner/start"),
+            ("POST", "/tuner/config"), ("POST", "/tuner/stop"),
+            ("GET", "/tuner/status"), ("GET", "/tuner/events?session_id=unknown"),
+            ("POST", "/playback/load"),
             ("GET", "/playback/status"), ("GET", "/api/recordings/take.wav"),
             ("POST", "/health"), ("DELETE", "/api/uploads"), ("POST", "/api/uploads/song.wav"),
         )
         with patch.object(backend_app, "get_live_feedback_session") as feedback, \
+             patch.object(backend_app, "get_tuner_session") as tuner, \
              patch.object(backend_app.iod, "start_capture") as begin, \
              patch.object(backend_app.iod, "stop_capture") as end, \
              patch.object(backend_app.playback, "load") as load, \
@@ -412,7 +416,7 @@ class DeviceApiTests(unittest.TestCase):
                 for method, route in routes:
                     with self.subTest(route=route, headers=remote_headers):
                         self.assertEqual(self.client.open(route, method=method, headers=remote_headers).status_code, 403)
-            for action in (feedback, begin, end, load, analyze):
+            for action in (feedback, tuner, begin, end, load, analyze):
                 action.assert_not_called()
 
     def test_native_local_controls_keep_original_contracts_without_session_ids(self):
@@ -428,6 +432,32 @@ class DeviceApiTests(unittest.TestCase):
             response = self.client.post("/feedback/stop")
         self.assertEqual(response.status_code, 200)
         feedback.return_value.stop.assert_called_once()
+
+    def test_local_tuner_routes_validate_and_report_busy_hardware(self):
+        from live_input_session import LiveInputBusyError
+        from tuner_session import TunerSession
+
+        session = TunerSession(iod=object())
+        with patch.object(backend_app, "get_tuner_session", return_value=session):
+            response = self.client.post("/tuner/start", json={"a4_hz": 900})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("a4_hz", response.get_json()["error"])
+            response = self.client.post("/tuner/config", json={"a4_hz": 442, "target_midi": 40})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["a4_hz"], 442.0)
+            self.assertEqual(response.get_json()["target_midi"], 40)
+            self.assertEqual(self.client.post("/tuner/config", json=[]).status_code, 400)
+            for body in ([], False, 1, "invalid"):
+                self.assertEqual(self.client.post("/tuner/start", json=body).status_code, 400)
+            self.assertEqual(self.client.get("/tuner/status").get_json()["state"], "idle")
+            self.assertEqual(
+                self.client.get("/tuner/events?session_id=unknown").get_json()["error"],
+                "unknown tuner session",
+            )
+            with patch.object(session, "start", side_effect=LiveInputBusyError("cannot start stream while capturing")):
+                response = self.client.post("/tuner/start", json={})
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(self.client.post("/tuner/stop").get_json()["state"], "idle")
 
     def test_remote_control_preflight_is_also_rejected(self):
         response = self.client.options("/feedback/start", headers={
